@@ -262,3 +262,17 @@ if ISSUE_242_MINIMUM_INSTANCE_ID is not None:
 
 # Number of times Celery retries to send data to external rest service
 REST_SERVICE_MAX_RETRIES = 3
+
+DATABASES = {
+'default': {
+'ENGINE': 'django.contrib.gis.db.backends.postgis',
+'NAME': os.environ.get('PG_DB', 'kobo_db'),
+'USER': os.environ.get('PG_USER', 'kobo'),
+'PASSWORD': os.environ.get('PG_PASS', 'kobo'),
+'HOST': os.environ.get('PG_HOST', '127.0.0.1'),
+'PORT': os.environ.get('PG_PORT', '5432'),
+}
+}
+
+
+USE_TZ = True
