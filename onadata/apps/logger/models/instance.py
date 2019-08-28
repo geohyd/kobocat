@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from datetime import datetime
 from hashlib import sha256
 
@@ -24,14 +25,7 @@ from onadata.libs.utils.common_tags import ATTACHMENTS, BAMBOO_DATASET_ID,\
     UUID, XFORM_ID_STRING, SUBMITTED_BY
 from onadata.libs.utils.model_tools import set_uuid
 from onadata.apps.logger.fields import LazyDefaultBooleanField
-
-
-class FormInactiveError(Exception):
-    def __unicode__(self):
-        return _("Form is inactive")
-
-    def __str__(self):
-        return unicode(self).encode('utf-8')
+from onadata.apps.logger.exceptions import DuplicateUUIDError, FormInactiveError
 
 
 # need to establish id_string of the xform before we run get_dict since
@@ -96,7 +90,7 @@ def update_xform_submission_count_delete(sender, instance, **kwargs):
         xform.num_of_submissions -= 1
         if xform.num_of_submissions < 0:
             xform.num_of_submissions = 0
-        xform.save()
+        xform.save(update_fields=['num_of_submissions'])
         profile_qs = User.profile.get_queryset()
         try:
             profile = profile_qs.select_for_update()\
@@ -107,7 +101,7 @@ def update_xform_submission_count_delete(sender, instance, **kwargs):
             profile.num_of_submissions -= 1
             if profile.num_of_submissions < 0:
                 profile.num_of_submissions = 0
-            profile.save()
+            profile.save(update_fields=['num_of_submissions'])
 
 
 @reversion.register
