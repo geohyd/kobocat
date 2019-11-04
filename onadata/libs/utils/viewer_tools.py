@@ -243,6 +243,8 @@ def _get_form_url(request, username, protocol='https'):
         username = settings.TEST_USERNAME
     else:
         http_host = request.get_host()
+    if hasattr(settings, 'KOBOCAT_ROOT_URI_PREFIX'):
+        http_host += settings.KOBOCAT_ROOT_URI_PREFIX
 
     # In case INTERNAL_DOMAIN_NAME is equal to PUBLIC_DOMAIN_NAME,
     # configuration doesn't use docker internal network.
