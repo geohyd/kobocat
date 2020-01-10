@@ -314,3 +314,20 @@ DATABASES = {
 TIME_ZONE = 'Europe/Paris'
 #USE_TZ = True
 USE_TZ = False
+
+#If you want to add middleware to Kobocat
+#MIDDLEWARE_CLASSES = ('onadata.middleware.Middle', ) + MIDDLEWARE_CLASSES
+
+#If you want change de max upload size on form.
+#Need to match with nginx client_max_body_size config
+#You cannot exceed ABSOLUTE_MAX_SIZE in enketo/public/js/src/module/connection.js, or change value to.
+DEFAULT_CONTENT_LENGTH = 20000000
+
+ADMINS = (
+    ('Jonathan Durand', 'jonathan.durand@anteagroup.com'),
+) + ADMINS
+MANAGERS = ADMINS
+DEFAULT_FROM_EMAIL = "survea@anteagroup.com"
+CORS_ORIGIN_WHITELIST = (
+    #'dev.ona.io',
+)
