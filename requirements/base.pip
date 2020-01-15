@@ -80,3 +80,5 @@ transifex-client
 
 # Shell Plus
 django-extensions==1.6.7
+
+uwsgi==2.0.17
