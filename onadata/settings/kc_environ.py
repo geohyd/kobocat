@@ -324,10 +324,10 @@ USE_TZ = False
 DEFAULT_CONTENT_LENGTH = 20000000
 
 ADMINS = (
-    ('Jonathan Durand', 'jonathan.durand@anteagroup.com'),
+    (os.environ.get('DEFAULT_ADMIN_NAME', ''), os.environ.get('DEFAULT_ADMIN_MAIL', '')),
 ) + ADMINS
 MANAGERS = ADMINS
-DEFAULT_FROM_EMAIL = "survea@anteagroup.com"
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', '')
 CORS_ORIGIN_WHITELIST = (
     #'dev.ona.io',
 )
