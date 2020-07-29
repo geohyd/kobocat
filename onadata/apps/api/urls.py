@@ -374,11 +374,11 @@ class MultiLookupRouterWithPatchList(MultiLookupRouter):
             mapping={
                 'get': 'list',
                 'post': 'create',
-                'patch': 'modify'
+                'patch': 'bulk_validation_status',
+                'delete': 'bulk_delete'
             },
             name='{basename}-list',
             initkwargs={'suffix': 'List'})
-
 
 
 router = MultiLookupRouter(trailing_slash=False)
@@ -389,7 +389,7 @@ router.register(r'orgs', OrganizationProfileViewSet)
 router.register(r'forms', XFormViewSet)
 router.register(r'projects', ProjectViewSet)
 router.register(r'teams', TeamViewSet)
-router.register(r'notes', NoteViewSet)
+router.register(r'notes', NoteViewSet, base_name='notes')
 router.register(r'stats', StatsViewSet, base_name='stats')
 router.register(r'stats/submissions', SubmissionStatsViewSet,
                 base_name='submissionstats')

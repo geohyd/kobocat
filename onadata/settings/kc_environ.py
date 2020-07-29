@@ -3,9 +3,9 @@ from datetime import timedelta
 import logging
 import os
 
-from celery.signals import after_setup_logger
 import dj_database_url
-
+from celery.signals import after_setup_logger
+from django.utils.six.moves.urllib.parse import quote_plus
 
 from onadata.settings.common import *
 
@@ -120,10 +120,9 @@ TEMPLATE_CONTEXT_PROCESSORS = (
 
 MIDDLEWARE_CLASSES = ('onadata.koboform.redirect_middleware.ConditionalRedirects', ) + MIDDLEWARE_CLASSES
 
-CSRF_COOKIE_DOMAIN = os.environ.get('CSRF_COOKIE_DOMAIN', None)
-
-if CSRF_COOKIE_DOMAIN:
-    SESSION_COOKIE_DOMAIN = CSRF_COOKIE_DOMAIN
+# Domain must not exclude KPI when sharing sessions
+if os.environ.get('SESSION_COOKIE_DOMAIN'):
+    SESSION_COOKIE_DOMAIN = os.environ['SESSION_COOKIE_DOMAIN']
     SESSION_COOKIE_NAME = 'kobonaut'
 
 SESSION_SERIALIZER = 'django.contrib.sessions.serializers.JSONSerializer'
@@ -135,10 +134,16 @@ SESSION_SERIALIZER = 'django.contrib.sessions.serializers.JSONSerializer'
 
 # MongoDB - moved here from common.py
 if MONGO_DATABASE.get('USER') and MONGO_DATABASE.get('PASSWORD'):
-    MONGO_CONNECTION_URL = (
-        "mongodb://%(USER)s:%(PASSWORD)s@%(HOST)s:%(PORT)s") % MONGO_DATABASE
+    MONGO_CONNECTION_URL = "mongodb://{user}:{password}@{host}:{port}/{db_name}".\
+        format(
+            user=MONGO_DATABASE['USER'],
+            password=quote_plus(MONGO_DATABASE['PASSWORD']),
+            host=MONGO_DATABASE['HOST'],
+            port=MONGO_DATABASE['PORT'],
+            db_name=MONGO_DATABASE['NAME']
+        )
 else:
-    MONGO_CONNECTION_URL = "mongodb://%(HOST)s:%(PORT)s" % MONGO_DATABASE
+    MONGO_CONNECTION_URL = "mongodb://%(HOST)s:%(PORT)s/%(NAME)s" % MONGO_DATABASE
 
 # PyMongo 3 does acknowledged writes by default
 # https://emptysqua.re/blog/pymongos-new-default-safe-writes/
@@ -292,42 +297,5 @@ if ISSUE_242_MINIMUM_INSTANCE_ID is not None:
         },
         'options': {'queue': 'kobocat_queue'}
     }
-# #### END ISSUE 242 FIX ######
 
-
-
-# Number of times Celery retries to send data to external rest service
-REST_SERVICE_MAX_RETRIES = 3
-
-DATABASES = {
-'default': {
-'ENGINE': 'django.contrib.gis.db.backends.postgis',
-'NAME': os.environ.get('PG_DB', 'kobo_db'),
-'USER': os.environ.get('PG_USER', 'kobo'),
-'PASSWORD': os.environ.get('PG_PASS', 'kobo'),
-'HOST': os.environ.get('PG_HOST', '127.0.0.1'),
-'PORT': os.environ.get('PG_PORT', '5432'),
-}
-}
-
-
-TIME_ZONE = 'Europe/Paris'
-#USE_TZ = True
-USE_TZ = False
-
-#If you want to add middleware to Kobocat
-#MIDDLEWARE_CLASSES = ('onadata.middleware.Middle', ) + MIDDLEWARE_CLASSES
-
-#If you want change de max upload size on form.
-#Need to match with nginx client_max_body_size config
-#You cannot exceed ABSOLUTE_MAX_SIZE in enketo/public/js/src/module/connection.js, or change value to.
-DEFAULT_CONTENT_LENGTH = 20000000
-
-ADMINS = (
-    (os.environ.get('DEFAULT_ADMIN_NAME', ''), os.environ.get('DEFAULT_ADMIN_MAIL', '')),
-) + ADMINS
-MANAGERS = ADMINS
-DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', '')
-CORS_ORIGIN_WHITELIST = (
-    #'dev.ona.io',
-)
+###### END ISSUE 242 FIX ######
