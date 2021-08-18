@@ -1,6 +1,7 @@
 #!/usr/bin/env python
-# encoding=utf-8
+# coding: utf-8
 from __future__ import print_function
+
 import logging
 import os
 import sys
@@ -12,7 +13,7 @@ if __name__ == "__main__":
     # altered for new settings layout
     if not any([arg.startswith('--settings=') for arg in sys.argv]):
         os.environ.setdefault("DJANGO_SETTINGS_MODULE",
-                              "onadata.settings.production")
+                              "onadata.settings.common")
         print('Your environment is:"{}"'.format(
             os.environ['DJANGO_SETTINGS_MODULE']))
 

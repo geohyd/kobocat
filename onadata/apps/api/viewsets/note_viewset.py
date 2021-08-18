@@ -1,5 +1,5 @@
 # coding: utf-8
-from __future__ import unicode_literals, absolute_import
+from __future__ import unicode_literals, print_function, division, absolute_import
 
 from django.db.models import Q
 from guardian.shortcuts import assign_perm, get_objects_for_user
@@ -9,7 +9,7 @@ from rest_framework.viewsets import ModelViewSet
 
 from onadata.apps.api.permissions import NoteObjectPermissions
 from onadata.apps.logger.models import Note, XForm
-from onadata.libs.permissions import CAN_VIEW_XFORM
+from onadata.libs.constants import CAN_VIEW_XFORM
 from onadata.libs.serializers.note_serializer import NoteSerializer
 
 

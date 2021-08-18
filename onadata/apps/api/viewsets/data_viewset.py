@@ -1,6 +1,7 @@
-# -*- coding: utf-8 -*-
+# coding: utf-8
+from __future__ import unicode_literals, print_function, division, absolute_import
+
 import json
-from xml.etree import ElementTree as et
 
 from django.db.models import Q
 from django.http import Http404
@@ -28,14 +29,17 @@ from onadata.libs.renderers import renderers
 from onadata.libs.mixins.anonymous_user_public_forms_mixin import (
     AnonymousUserPublicFormsMixin)
 from onadata.apps.api.permissions import XFormDataPermissions
-from onadata.libs.permissions import CAN_CHANGE_XFORM
+from onadata.libs.constants import (
+    CAN_CHANGE_XFORM,
+    CAN_VALIDATE_XFORM,
+    CAN_DELETE_DATA_XFORM
+)
 from onadata.libs.serializers.data_serializer import (
     DataSerializer, DataListSerializer, DataInstanceSerializer)
 from onadata.libs import filters
 from onadata.libs.utils.viewer_tools import (
     EnketoError,
     get_enketo_edit_url)
-from onadata.libs.utils.chart_tools import get_choice_label
 
 
 SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS']
@@ -48,7 +52,7 @@ This endpoint provides access to submitted data in JSON format. Where:
 
 * `pk` - the form unique identifier
 * `dataid` - submission data unique identifier
-* `owner` - username of the owner(user/organization) of the data point
+* `owner` - username of the owner of the data point
 
 ## GET JSON List of data end points
 
@@ -107,7 +111,6 @@ Provides a list of json submitted data for a specific form.
 >        [
 >            {
 >                "_id": 4503,
->                "_bamboo_dataset_id": "",
 >                "_deleted_at": null,
 >                "expense_type": "service",
 >                "_xform_id_string": "exp",
@@ -156,7 +159,6 @@ Get a single specific submission json data providing `pk`
 >
 >            {
 >                "_id": 4503,
->                "_bamboo_dataset_id": "",
 >                "_deleted_at": null,
 >                "expense_type": "service",
 >                "_xform_id_string": "exp",
@@ -173,54 +175,6 @@ Get a single specific submission json data providing `pk`
 >                "imei": "351746052013466",
 >                "formhub/uuid": "46ea15e2b8134624a47e2c4b77eef0d4",
 >                "kind": "monthly",
->                "_submission_time": "2013-01-03T02:27:19",
->                "required": "yes",
->                "_attachments": [],
->                "item": "Rent",
->                "amount": "35000.0",
->                "deviceid": "351746052013466",
->                "subscriberid": "639027...60317"
->            },
->            {
->                ....
->                "subscriberid": "639027...60317"
->            }
->        ]
-
-Get a single specific submission json data providing `pk`
- and `dataid` as url path parameters with label fields, where:
-
-* `pk` - is the identifying number for a specific form
-* `dataid` - is the unique id of the data, the value of `_id` or `_uuid`
-* ?label=true - parameter url allowing to replace "name" by "label" fields from the xform
-
-<pre class="prettyprint">
-<b>GET</b> /api/v1/data/<code>{pk}</code>/<code>{dataid}</code>?label=true</pre>
-> Example
->
->       curl -X GET https://example.com/api/v1/data/22845/4503?label=true
-
-> Response (ex: "name" = monthly, "label" = Monthly)
->
->            {
->                "_id": 4503,
->                "_bamboo_dataset_id": "",
->                "_deleted_at": null,
->                "expense_type": "service",
->                "_xform_id_string": "exp",
->                "_geolocation": [
->                    null,
->                    null
->                ],
->                "end": "2013-01-03T10:26:25.674+03",
->                "start": "2013-01-03T10:25:17.409+03",
->                "expense_date": "2011-12-23",
->                "_status": "submitted_via_web",
->                "today": "2013-01-03",
->                "_uuid": "2e599f6fe0de42d3a1417fb7d821c859",
->                "imei": "351746052013466",
->                "formhub/uuid": "46ea15e2b8134624a47e2c4b77eef0d4",
->                "kind": "Monthly",
 >                "_submission_time": "2013-01-03T02:27:19",
 >                "required": "yes",
 >                "_attachments": [],
@@ -261,7 +215,6 @@ API Parameters</a>.
 >        [
 >            {
 >                "_id": 4503,
->                "_bamboo_dataset_id": "",
 >                "_deleted_at": null,
 >                "expense_type": "service",
 >                "_xform_id_string": "exp",
@@ -389,28 +342,6 @@ Payload
 >           "label": "Not Approved"
 >       }
 
-## Get list of public data endpoints
-
-<pre class="prettyprint">
-<b>GET</b> /api/v1/data/public
-</pre>
-
-> Example
->
->       curl -X GET https://example.com/api/v1/data/public
-
-> Response
->
->        [{
->            "id": 4240,
->            "id_string": "dhis2form"
->            "title": "dhis2form"
->            "description": "dhis2form"
->            "url": "https://example.com/api/v1/data/4240"
->         },
->            ...
->        ]
-
 ## Get enketo edit link for a submission instance
 
 <pre class="prettyprint">
@@ -460,8 +391,6 @@ Delete a specific submission in a form
     lookup_field = 'pk'
     lookup_fields = ('pk', 'dataid')
     extra_lookup_fields = None
-    public_data_endpoint = 'public'
-
     queryset = XForm.objects.all()
 
     def bulk_delete(self, request, *args, **kwargs):
@@ -469,7 +398,7 @@ Delete a specific submission in a form
         Bulk delete instances
         """
         xform = self.__validate_permission_on_bulk_action(request,
-                                                          'change_xform')
+                                                          CAN_DELETE_DATA_XFORM)
         payload = self.__get_payload(request)
 
         postgres_query, mongo_query = self.__build_db_queries(xform, payload)
@@ -490,7 +419,7 @@ Delete a specific submission in a form
     def bulk_validation_status(self, request, *args, **kwargs):
 
         xform = self.__validate_permission_on_bulk_action(request,
-                                                          'validate_xform')
+                                                          CAN_VALIDATE_XFORM)
         payload = self.__get_payload(request)
 
         try:
@@ -520,8 +449,7 @@ Delete a specific submission in a form
         pk_lookup, dataid_lookup = self.lookup_fields
         pk = self.kwargs.get(pk_lookup)
         dataid = self.kwargs.get(dataid_lookup)
-        if pk is not None and dataid is None \
-                and pk != self.public_data_endpoint:
+        if pk is not None and dataid is None:
             serializer_class = DataListSerializer
         elif pk is not None and dataid is not None:
             serializer_class = DataInstanceSerializer
@@ -540,43 +468,16 @@ Delete a specific submission in a form
             try:
                 int(pk)
             except ValueError:
-                raise ParseError(_(u"Invalid pk %(pk)s" % {'pk': pk}))
+                raise ParseError(_("Invalid pk `%(pk)s`" % {'pk': pk}))
             try:
                 int(dataid)
             except ValueError:
-                raise ParseError(_(u"Invalid dataid %(dataid)s"
+                raise ParseError(_("Invalid dataid `%(dataid)s`"
                                    % {'dataid': dataid}))
 
             obj = get_object_or_404(Instance, pk=dataid, xform__pk=pk)
             
-            # Modify data object (label parameters)
-            if self.request._request.GET.get('label') and self.request._request.GET.get('label').lower() == 'true':
-                # Access to the right xform to get label
-                xform = self._filtered_or_shared_qs(self.queryset, self.kwargs['pk'])[0]
-                dd = xform.data_dictionary()
-                tree = et.ElementTree(et.fromstring(obj.xml))
-                # Parse the JSON object to replace "name" by "label" on JSON and XML part
-                self.parseLabelJSON(obj.json, dd, tree)
-                obj.xml = et.tostring(tree.getroot())
-
         return obj
-
-    # Parsing JSON field and subfield to replace "name" by xform "label"
-    def parseLabelJSON(self, JSONObj, xform_dict, tree):
-        for item in JSONObj:
-            # Key parsing
-            real_item = item.split('/')[-1]
-            # value is string/unicode ?
-            if type(JSONObj[item]) is unicode:
-                for ee in xform_dict.survey_elements:
-                    if ee.label and ee.name == real_item and ee.children:
-                        label = get_choice_label(ee.children, JSONObj[item])[0]
-                        tree.find('.//' + item).text = label
-                        JSONObj[item] = label
-            elif type(JSONObj[item]) is list:
-                tmp_dict = JSONObj[item]
-                for index in tmp_dict:
-                    self.parseLabelJSON(index, xform_dict, tree)
 
     def _get_public_forms_queryset(self):
         return XForm.objects.filter(Q(shared=True) | Q(shared_data=True))
@@ -590,7 +491,7 @@ Delete a specific submission in a form
             qs = XForm.objects.filter(**filter_kwargs)
 
             if not qs:
-                raise Http404(_(u"No data matches with given query."))
+                raise Http404(_("No data matches with given query."))
 
         return qs
 
@@ -607,10 +508,7 @@ Delete a specific submission in a form
             try:
                 int(pk)
             except ValueError:
-                if pk == self.public_data_endpoint:
-                    qs = self._get_public_forms_queryset()
-                else:
-                    raise ParseError(_(u"Invalid pk %(pk)s" % {'pk': pk}))
+                raise ParseError(_("Invalid pk %(pk)s" % {'pk': pk}))
             else:
                 qs = self._filtered_or_shared_qs(qs, pk)
 
@@ -630,7 +528,7 @@ Delete a specific submission in a form
         data = {}
 
         if request.method != "GET":
-            if request.user.has_perm("validate_xform", instance.asset):
+            if request.user.has_perm(CAN_VALIDATE_XFORM, instance.asset):
                 if request.method == "PATCH" and \
                         not add_validation_status_to_instance(request, instance):
                     http_status = status.HTTP_400_BAD_REQUEST
@@ -641,7 +539,7 @@ Delete a specific submission in a form
                     else:
                         http_status = status.HTTP_400_BAD_REQUEST
             else:
-                raise PermissionDenied(_(u"You do not have validate permissions."))
+                raise PermissionDenied(_("You do not have validate permissions."))
 
         if http_status == status.HTTP_200_OK:
             data = instance.validation_status
@@ -687,12 +585,12 @@ Delete a specific submission in a form
         self.object = self.get_object()
         data = {}
         if isinstance(self.object, XForm):
-            raise ParseError(_(u"Data id not provided."))
+            raise ParseError(_("Data id not provided."))
         elif isinstance(self.object, Instance):
             if request.user.has_perm("change_xform", self.object.xform):
                 return_url = request.query_params.get('return_url')
                 if not return_url:
-                    raise ParseError(_(u"return_url not provided."))
+                    raise ParseError(_("return_url not provided."))
 
                 try:
                     data["url"] = get_enketo_edit_url(
@@ -700,7 +598,7 @@ Delete a specific submission in a form
                 except EnketoError as e:
                     data['detail'] = "{}".format(e)
             else:
-                raise PermissionDenied(_(u"You do not have edit permissions."))
+                raise PermissionDenied(_("You do not have edit permissions."))
 
         return Response(data=data)
 
@@ -710,31 +608,23 @@ Delete a specific submission in a form
             instance = self.get_object()
             return Response(instance.xml)
         else:
-            # 14/01/2019 - GEOHYD/ANTEA : retrieve modify object (label parameters)
-            #return super(DataViewSet, self).retrieve(request, *args, **kwargs)
-            data = super(DataViewSet, self).retrieve(request, *args, **kwargs)
-            instance = self.get_object()
-            merged_obj = dict()
-            merged_obj.update(data.data)
-            merged_obj.update(instance.json)
-            data.data = merged_obj
-            return data
+            return super(DataViewSet, self).retrieve(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
         self.object = self.get_object()
         if isinstance(self.object, XForm):
-            raise ParseError(_(u"Data id not provided."))
+            raise ParseError(_("Data id not provided."))
         elif isinstance(self.object, Instance):
             # Redundant permissions check that duplicates
             # `XFormDataPermissions`, left here to minimize changes. We're
             # deleting an `Instance`, not an `XForm`, so the correct permission
-            # to verify is `change_xform` (`CAN_CHANGE_XFORM`). This matches
+            # to verify is 'delete_data_xform' (`CAN_DELETE_DATA_XFORM`). This matches
             # the behavior of `onadata.apps.main.views.delete_data`
-            if request.user.has_perm(CAN_CHANGE_XFORM, self.object.xform):
+            if request.user.has_perm(CAN_DELETE_DATA_XFORM, self.object.xform):
                 self.object.delete()
             else:
-                raise PermissionDenied(_(u"You do not have delete "
-                                         u"permissions."))
+                raise PermissionDenied(_("You do not have delete "
+                                         "permissions."))
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -745,17 +635,6 @@ Delete a specific submission in a form
         if lookup_field not in kwargs.keys():
             self.object_list = self.filter_queryset(self.get_queryset())
             serializer = self.get_serializer(self.object_list, many=True)
-
-            return Response(serializer.data)
-
-        if lookup == self.public_data_endpoint:
-            self.object_list = self._get_public_forms_queryset()
-
-            page = self.paginate_queryset(self.object_list)
-            if page is not None:
-                serializer = self.get_pagination_serializer(page)
-            else:
-                serializer = self.get_serializer(self.object_list, many=True)
 
             return Response(serializer.data)
 
@@ -872,7 +751,7 @@ Delete a specific submission in a form
         xform = self.get_object()
         if not request.user.has_perm(permission, xform):
             raise PermissionDenied(
-                _(u"You do not have sufficient rights to perform this operation.")
+                _("You do not have sufficient rights to perform this operation.")
             )
         return xform
 

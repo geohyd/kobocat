@@ -1,33 +1,43 @@
-# -*- coding: utf-8 -*-
+# coding: utf-8
+from __future__ import unicode_literals, print_function, division, absolute_import
+
+import io
 import json
 import os
-import pytz
 import re
-import io
-
-from hashlib import md5
-from django.utils import timezone
-from datetime import datetime
-from django.conf import settings
-from django.db import models
-from django.contrib.auth.models import User
-from django.core.urlresolvers import reverse
-from django.db.models.signals import post_save, post_delete
-from django.core.exceptions import ObjectDoesNotExist
-from django.core.files.storage import get_storage_class
-from django.utils.translation import ugettext_lazy, ugettext as _
-from guardian.shortcuts import \
-    assign_perm, \
-    get_perms_for_model
 from cStringIO import StringIO
-from taggit.managers import TaggableManager
+from datetime import datetime
+from hashlib import md5
 from xml.sax import saxutils
 
-from onadata.apps.logger.xform_instance_parser import XLSFormError
-from onadata.libs.models.base_model import BaseModel
-from ....koboform.pyxform_utils import convert_csv_to_xls
-from onadata.apps.logger.fields import LazyDefaultBooleanField
+import pytz
+from django.conf import settings
+from django.contrib.auth.models import User
+from django.core.exceptions import ObjectDoesNotExist
+from django.core.files.storage import get_storage_class
+from django.core.urlresolvers import reverse
+from django.db import models
+from django.db.models.signals import post_save, post_delete
+from django.utils import timezone
+from django.utils.encoding import smart_text
+from django.utils.translation import ugettext_lazy, ugettext as _
+from guardian.shortcuts import (
+    assign_perm,
+    get_perms_for_model
+)
+from taggit.managers import TaggableManager
 
+from onadata.apps.logger.fields import LazyDefaultBooleanField
+from onadata.apps.logger.xform_instance_parser import XLSFormError
+from onadata.koboform.pyxform_utils import convert_csv_to_xls
+from onadata.libs.constants import (
+    CAN_ADD_SUBMISSIONS,
+    CAN_VALIDATE_XFORM,
+    CAN_VIEW_XFORM,
+    CAN_DELETE_DATA_XFORM,
+    CAN_TRANSFER_OWNERSHIP,
+)
+from onadata.libs.models.base_model import BaseModel
 
 try:
     from formpack.utils.xls_to_ss_structure import xls_to_dicts
@@ -51,8 +61,8 @@ class XForm(BaseModel):
     MAX_ID_LENGTH = 100
 
     xls = models.FileField(upload_to=upload_to, null=True)
-    json = models.TextField(default=u'')
-    description = models.TextField(default=u'', null=True)
+    json = models.TextField(default='')
+    description = models.TextField(default='', null=True)
     xml = models.TextField()
 
     user = models.ForeignKey(User, related_name='xforms', null=True)
@@ -80,7 +90,7 @@ class XForm(BaseModel):
     date_modified = models.DateTimeField(auto_now=True)
     last_submission_time = models.DateTimeField(blank=True, null=True)
     has_start_time = models.BooleanField(default=False)
-    uuid = models.CharField(max_length=32, default=u'', db_index=True)
+    uuid = models.CharField(max_length=32, default='', db_index=True)
 
     uuid_regex = re.compile(r'(<instance>.*?id="[^"]+">)(.*</instance>)(.*)',
                             re.DOTALL)
@@ -88,7 +98,6 @@ class XForm(BaseModel):
                                    re.DOTALL)
     uuid_node_location = 2
     uuid_bind_location = 4
-    bamboo_dataset = models.CharField(max_length=60, default=u'')
     instances_with_geopoints = models.BooleanField(default=False)
     num_of_submissions = models.IntegerField(default=0)
 
@@ -104,11 +113,11 @@ class XForm(BaseModel):
         verbose_name_plural = ugettext_lazy("XForms")
         ordering = ("id_string",)
         permissions = (
-            ("view_xform", _("Can view associated data")),
-            ("report_xform", _("Can make submissions to the form")),
-            ("move_xform", _(u"Can move form between projects")),
-            ("transfer_xform", _(u"Can transfer form ownership.")),
-            ("validate_xform", _(u"Can validate submissions.")),
+            (CAN_VIEW_XFORM, _('Can view associated data')),
+            (CAN_ADD_SUBMISSIONS, _('Can make submissions to the form')),
+            (CAN_TRANSFER_OWNERSHIP, _('Can transfer form ownership.')),
+            (CAN_VALIDATE_XFORM, _('Can validate submissions')),
+            (CAN_DELETE_DATA_XFORM, _('Can delete submissions')),
         )
 
     def file_name(self):
@@ -147,7 +156,8 @@ class XForm(BaseModel):
         self.id_string = matches[0]
 
     def _set_title(self):
-        text = re.sub(r"\s+", " ", self.xml)
+        self.xml = smart_text(self.xml)
+        text = re.sub(r'\s+', ' ', self.xml)
         matches = title_pattern.findall(text)
         title_xml = matches[0][:XFORM_TITLE_LENGTH]
 
@@ -157,10 +167,8 @@ class XForm(BaseModel):
         if self.title and title_xml != self.title:
             title_xml = self.title[:XFORM_TITLE_LENGTH]
             title_xml = saxutils.escape(title_xml)
-            if isinstance(self.xml, str):
-                self.xml = self.xml.decode('utf-8')
             self.xml = title_pattern.sub(
-                u"<h:title>%s</h:title>" % title_xml, self.xml)
+                "<h:title>%s</h:title>" % title_xml, self.xml)
 
         self.title = title_xml
 
@@ -189,13 +197,13 @@ class XForm(BaseModel):
         # if so, the one must match but only if xform is NOT new
         if self.pk and old_id_string and old_id_string != self.id_string:
             raise XLSFormError(
-                _(u"Your updated form's id_string '%(new_id)s' must match "
+                _("Your updated form's id_string '%(new_id)s' must match "
                   "the existing forms' id_string '%(old_id)s'." %
                   {'new_id': self.id_string, 'old_id': old_id_string}))
 
         if getattr(settings, 'STRICT', True) and \
                 not re.search(r"^[\w-]+$", self.id_string):
-            raise XLSFormError(_(u'In strict mode, the XForm ID must be a '
+            raise XLSFormError(_('In strict mode, the XForm ID must be a '
                                'valid slug and contain no spaces.'))
 
         if not self.sms_id_string:
@@ -220,20 +228,6 @@ class XForm(BaseModel):
             self.save(update_fields=['num_of_submissions'])
         return self.num_of_submissions
     submission_count.short_description = ugettext_lazy("Submission Count")
-
-    @property
-    def submission_count_for_today(self):
-        current_timzone_name = timezone.get_current_timezone_name()
-        current_timezone = pytz.timezone(current_timzone_name)
-        today = datetime.today()
-        current_date = current_timezone.localize(
-            datetime(today.year,
-                     today.month,
-                     today.day))
-        count = self.instances.filter(
-            deleted_at__isnull=True,
-            date_created=current_date).count()
-        return count
 
     def geocoded_submission_count(self):
         """Number of geocoded submissions."""
@@ -261,7 +255,7 @@ class XForm(BaseModel):
 
     @property
     def hash(self):
-        return u'%s' % md5(self.xml.encode('utf8')).hexdigest()
+        return '%s' % md5(self.xml.encode('utf8')).hexdigest()
 
     @property
     def can_be_replaced(self):
@@ -276,11 +270,11 @@ class XForm(BaseModel):
         return cls.objects.filter(shared=True)
 
     def _xls_file_io(self):
-        '''
+        """
         pulls the xls file from remote storage
 
         this should be used sparingly
-        '''
+        """
         file_path = self.xls.name
         default_storage = get_storage_class()()
 
@@ -291,12 +285,11 @@ class XForm(BaseModel):
                 else:
                     return StringIO(ff.read())
 
-
     def to_kpi_content_schema(self):
-        '''
-        parses xlsform structure into json representation
+        """
+        Parses xlsform structure into json representation
         of spreadsheet structure.
-        '''
+        """
         if not xls_to_dicts:
             raise ImportError('formpack module needed')
         content = xls_to_dicts(self._xls_file_io())
@@ -305,9 +298,11 @@ class XForm(BaseModel):
                       json.dumps(content, indent=4)))
 
     def to_xlsform(self):
-        '''Generate an XLS format XLSForm copy of this form.'''
-        file_path= self.xls.name
-        default_storage= get_storage_class()()
+        """
+        Generate an XLS format XLSForm copy of this form.
+        """
+        file_path = self.xls.name
+        default_storage = get_storage_class()()
 
         if file_path != '' and default_storage.exists(file_path):
             with default_storage.open(file_path) as xlsform_file:

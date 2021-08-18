@@ -1,3 +1,5 @@
+# coding: utf-8
+from __future__ import unicode_literals, print_function, division, absolute_import
 import logging
 import pytz
 import re
@@ -10,9 +12,11 @@ from requests import ConnectionError
 
 from onadata.apps.viewer.models.export import Export
 from onadata.libs.exceptions import NoRecordsFoundError
-from onadata.libs.utils.export_tools import generate_export,\
-    generate_attachments_zip_export, generate_kml_export,\
-    generate_external_export
+from onadata.libs.utils.export_tools import (
+    generate_export,
+    generate_attachments_zip_export,
+    generate_kml_export
+)
 from onadata.libs.utils.logger_tools import mongo_sync_status, report_exception
 
 
@@ -66,16 +70,6 @@ def create_async_export(xform, export_type, query, force_xlsx, options=None):
         # start async export
         result = create_kml_export.apply_async(
             (), arguments, countdown=10)
-    elif export_type == Export.EXTERNAL_EXPORT:
-        if options and "token" in options:
-            arguments["token"] = options["token"]
-        if options and "meta" in options:
-            arguments["meta"] = options["meta"]
-
-        result = create_external_export.apply_async(
-            (), arguments, countdown=10)
-    elif export_type == Export.ANALYSER_EXPORT:
-        result= create_analyser_export.apply_async((), arguments, countdown=10)
     else:
         raise Export.ExportTypeError
     if result:
@@ -121,45 +115,6 @@ def create_xls_export(username, id_string, export_id, query=None,
             'id_string': id_string
         }
         report_exception("XLS Export Exception: Export ID - "
-                         "%(export_id)s, /%(username)s/%(id_string)s"
-                         % details, e, sys.exc_info())
-        # Raise for now to let celery know we failed
-        # - doesnt seem to break celery`
-        raise
-    else:
-        return gen_export.id
-
-
-@task()
-def create_analyser_export(username, id_string, export_id, query=None):
-    # Mostly a serving of copy pasta based on the above `create_xls_export()`. Enjoy.
-
-    # we re-query the db instead of passing model objects according to
-    # http://docs.celeryproject.org/en/latest/userguide/tasks.html#state
-    ext = 'xlsx'
-
-    try:
-        export = Export.objects.get(id=export_id)
-    except Export.DoesNotExist:
-        # no export for this ID return None.
-        return None
-
-    # though export is not available when for has 0 submissions, we
-    # catch this since it potentially stops celery
-    try:
-        gen_export = generate_export(Export.ANALYSER_EXPORT, ext, username, id_string, export_id, 
-                                     query, group_delimiter='/', split_select_multiples=True, 
-                                     binary_select_multiples=False)
-    except (Exception, NoRecordsFoundError) as e:
-        export.internal_status = Export.FAILED
-        export.save()
-        # mail admins
-        details = {
-            'export_id': export_id,
-            'username': username,
-            'id_string': id_string
-        }
-        report_exception("Analyser Export Exception: Export ID - "
                          "%(export_id)s, /%(username)s/%(id_string)s"
                          % details, e, sys.exc_info())
         # Raise for now to let celery know we failed
@@ -311,34 +266,6 @@ def create_sav_zip_export(username, id_string, export_id, query=None,
             'id_string': id_string
         }
         report_exception("SAV ZIP Export Exception: Export ID - "
-                         "%(export_id)s, /%(username)s/%(id_string)s"
-                         % details, e, sys.exc_info())
-        raise
-    else:
-        return gen_export.id
-
-
-@task()
-def create_external_export(username, id_string, export_id, query=None,
-                           token=None, meta=None):
-    export = Export.objects.get(id=export_id)
-    try:
-        # though export is not available when for has 0 submissions, we
-        # catch this since it potentially stops celery
-        gen_export = generate_external_export(
-            Export.EXTERNAL_EXPORT, username,
-            id_string, export_id, token, query, meta
-        )
-    except (Exception, NoRecordsFoundError, ConnectionError) as e:
-        export.internal_status = Export.FAILED
-        export.save()
-        # mail admins
-        details = {
-            'export_id': export_id,
-            'username': username,
-            'id_string': id_string
-        }
-        report_exception("External Export Exception: Export ID - "
                          "%(export_id)s, /%(username)s/%(id_string)s"
                          % details, e, sys.exc_info())
         raise

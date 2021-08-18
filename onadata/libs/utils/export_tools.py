@@ -1,3 +1,6 @@
+# coding: utf-8
+from __future__ import unicode_literals, print_function, division, absolute_import
+
 import csv
 from datetime import datetime, date
 import json
@@ -5,7 +8,6 @@ import os
 import re
 import six
 import tempfile
-from urlparse import urlparse
 from zipfile import ZipFile
 
 from bson import json_util
@@ -21,30 +23,38 @@ from openpyxl.workbook import Workbook
 from pyxform.question import Question
 from pyxform.section import Section, RepeatingSection
 from savReaderWriter import SavWriter
-from json2xlsclient.client import Client
 
 from onadata.apps.logger.models import Attachment, Instance, XForm
-from onadata.apps.main.models.meta_data import MetaData
 from onadata.apps.viewer.models.export import Export
 from onadata.apps.api.mongo_helper import MongoHelper
 from onadata.libs.utils.viewer_tools import create_attachments_zipfile
 from onadata.libs.utils.common_tags import (
-    ID, XFORM_ID_STRING, STATUS, ATTACHMENTS, GEOLOCATION, BAMBOO_DATASET_ID,
-    DELETEDAT, USERFORM_ID, INDEX, PARENT_INDEX, PARENT_TABLE_NAME,
-    SUBMISSION_TIME, UUID, TAGS, NOTES)
-from onadata.libs.exceptions import J2XException
-from .analyser_export import generate_analyser
+    ID,
+    XFORM_ID_STRING,
+    STATUS,
+    ATTACHMENTS,
+    GEOLOCATION,
+    DELETEDAT,
+    USERFORM_ID,
+    INDEX,
+    PARENT_INDEX,
+    PARENT_TABLE_NAME,
+    SUBMISSION_TIME,
+    UUID,
+    TAGS,
+    NOTES
+)
 
 
 # this is Mongo Collection where we will store the parsed submissions
 xform_instances = settings.MONGO_DB.instances
 
 QUESTION_TYPES_TO_EXCLUDE = [
-    u'note',
+    'note',
 ]
 # the bind type of select multiples that we use to compare
-MULTIPLE_SELECT_BIND_TYPE = u"select"
-GEOPOINT_BIND_TYPE = u"geopoint"
+MULTIPLE_SELECT_BIND_TYPE = "select"
+GEOPOINT_BIND_TYPE = "geopoint"
 
 
 def encode_if_str(row, key, encode_dates=False):
@@ -80,14 +90,14 @@ class DictOrganizer(object):
             obs[table_name] = []
         this_index = len(obs[table_name])
         obs[table_name].append({
-            u"_parent_table_name": parent_table_name,
-            u"_parent_index": parent_index,
+            "_parent_table_name": parent_table_name,
+            "_parent_index": parent_index,
         })
         for k, v in d.items():
             if type(v) != dict and type(v) != list:
                 assert k not in obs[table_name][-1]
                 obs[table_name][-1][k] = v
-        obs[table_name][-1][u"_index"] = this_index
+        obs[table_name][-1]["_index"] = this_index
 
         for k, v in d.items():
             if type(v) == dict:
@@ -119,7 +129,7 @@ class DictOrganizer(object):
             "d": d[root_name],
             "obs": result,
             "table_name": root_name,
-            "parent_table_name": u"",
+            "parent_table_name": "",
             "parent_index": -1,
         }
         self._build_obs_from_dict(**kwargs)
@@ -171,7 +181,7 @@ def dict_to_joined_export(data, index, indices, name):
 
 class ExportBuilder(object):
     IGNORED_COLUMNS = [XFORM_ID_STRING, STATUS, ATTACHMENTS, GEOLOCATION,
-                       BAMBOO_DATASET_ID, DELETEDAT]
+                       DELETEDAT]
     # fields we export but are not within the form's structure
     EXTRA_FIELDS = [ID, UUID, SUBMISSION_TIME, INDEX, PARENT_TABLE_NAME,
                     PARENT_INDEX, TAGS, NOTES]
@@ -236,7 +246,7 @@ class ExportBuilder(object):
                         build_sections(
                             current_section, child, sections, select_multiples,
                             gps_fields, encoded_fields, field_delimiter)
-                elif isinstance(child, Question) and child.bind.get(u"type")\
+                elif isinstance(child, Question) and child.bind.get("type")\
                         not in QUESTION_TYPES_TO_EXCLUDE:
                     # add to survey_sections
                     if isinstance(child, Question):
@@ -246,7 +256,7 @@ class ExportBuilder(object):
                                 child.get_abbreviated_xpath(),
                                 field_delimiter),
                             'xpath': child_xpath,
-                            'type': child.bind.get(u"type")
+                            'type': child.bind.get("type")
                         })
 
                         if MongoHelper.is_attribute_invalid(child_xpath):
@@ -256,7 +266,7 @@ class ExportBuilder(object):
                                 {child_xpath: MongoHelper.encode(child_xpath)})
 
                     # if its a select multiple, make columns out of its choices
-                    if child.bind.get(u"type") == MULTIPLE_SELECT_BIND_TYPE\
+                    if child.bind.get("type") == MULTIPLE_SELECT_BIND_TYPE\
                             and self.SPLIT_SELECT_MULTIPLES:
                         for c in child.children:
                             _xpath = c.get_abbreviated_xpath()
@@ -277,7 +287,7 @@ class ExportBuilder(object):
                              for c in child.children])
 
                     # split gps fields within this section
-                    if child.bind.get(u"type") == GEOPOINT_BIND_TYPE:
+                    if child.bind.get("type") == GEOPOINT_BIND_TYPE:
                         # add columns for geopoint components
                         xpaths = DataDictionary.get_additional_geopoint_xpaths(
                             child.get_abbreviated_xpath())
@@ -327,7 +337,7 @@ class ExportBuilder(object):
             selections = []
             if data:
                 selections = [
-                    u'{0}/{1}'.format(
+                    '{0}/{1}'.format(
                         xpath, selection) for selection in data.split()]
             if not cls.BINARY_SELECT_MULTIPLES:
                 row.update(dict(
@@ -568,32 +578,10 @@ class ExportBuilder(object):
 
         wb.save(filename=path)
 
-    def to_analyser_export(self, path, data, username, xform_id_string, *args):
-        # Get the XLSForm.
-        xform = XForm.objects.get(user__username__iexact=username, id_string__exact=xform_id_string)
-        xlsform_io= xform.to_xlsform()
-
-        if xlsform_io is None:
-            raise RuntimeError('XLSForm `{}` for user `{}` could not be retrieved from storage.'.
-                               format(xform_id_string, username))
-
-        prefix = slugify('analyser_data__{}__{}'.format(username, xform_id_string))
-        with tempfile.NamedTemporaryFile('w+b', prefix=prefix, suffix='.xlsx',) as xls_data:
-            # Generate a new XLS export to work from.
-            self.to_xls_export(xls_data.name, data)
-            xls_data.file.seek(0)
-
-            # Generate the analyser file.
-            analyser_io= generate_analyser(xlsform_io, xls_data)
-
-        # Write the generated analyser file to the specified path
-        #   ...which itself points to a temp file.
-        with open(path, 'wb') as analyser_file:
-            analyser_file.write(analyser_io.read())
-
     def to_flat_csv_export(
             self, path, data, username, id_string, filter_query):
         # TODO resolve circular import
+
         from onadata.apps.viewer.pandas_mongo_bridge import\
             CSVDataFrameBuilder
 
@@ -708,7 +696,6 @@ def generate_export(export_type, extension, username, id_string,
         Export.CSV_EXPORT: 'to_flat_csv_export',
         Export.CSV_ZIP_EXPORT: 'to_zipped_csv',
         Export.SAV_ZIP_EXPORT: 'to_zipped_sav',
-        Export.ANALYSER_EXPORT: 'to_analyser_export'
     }
 
     xform = XForm.objects.get(
@@ -735,9 +722,6 @@ def generate_export(export_type, extension, username, id_string,
     # generate filename
     basename = "%s_%s" % (
         id_string, datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))
-    if export_type == Export.ANALYSER_EXPORT:
-        # Analyser exports should be distinguished by more than just their file extension.
-        basename= '{}_ANALYSER_{}'.format(id_string, datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))
     filename = basename + "." + extension
 
     # check filename is unique
@@ -780,7 +764,7 @@ def query_mongo(username, id_string, query=None, hide_deleted=True):
     query = json.loads(query, object_hook=json_util.object_hook)\
         if query else {}
     query = MongoHelper.to_safe_dict(query)
-    query[USERFORM_ID] = u'{0}_{1}'.format(username, id_string)
+    query[USERFORM_ID] = '{0}_{1}'.format(username, id_string)
     if hide_deleted:
         # display only active elements
         # join existing query with deleted_at_query on an $and
@@ -928,125 +912,4 @@ def kml_export_data(id_string, user):
                 'lng': point.x,
                 })
 
-
     return data_for_template
-
-
-def _get_records(instances):
-    records = []
-    for instance in instances:
-        record = instance.get_dict()
-        # Get the keys
-        for key in record:
-            if '/' in key:
-                # replace with _
-                record[key.replace('/', '_')]\
-                    = record.pop(key)
-        records.append(record)
-
-    return records
-
-
-def _get_server_from_metadata(xform, meta, token):
-    report_templates = MetaData.external_export(xform)
-
-    if meta:
-        try:
-            int(meta)
-        except ValueError:
-            raise Exception(u"Invalid metadata pk {0}".format(meta))
-
-        # Get the external server from the metadata
-        result = report_templates.get(pk=meta)
-        server = result.external_export_url
-        name = result.external_export_name
-    elif token:
-        server = token
-        name = None
-    else:
-        # Take the latest value in the metadata
-        if not report_templates:
-            raise Exception(
-                u"Could not find the template token: Please upload template.")
-
-        server = report_templates[0].external_export_url
-        name = report_templates[0].external_export_name
-
-    return server, name
-
-
-def generate_external_export(
-    export_type, username, id_string, export_id=None,  token=None,
-        filter_query=None, meta=None):
-
-    xform = XForm.objects.get(
-        user__username__iexact=username, id_string__exact=id_string)
-    user = User.objects.get(username=username)
-
-    server, name = _get_server_from_metadata(xform, meta, token)
-
-    # dissect the url
-    parsed_url = urlparse(server)
-
-    token = parsed_url.path[5:]
-
-    ser = parsed_url.scheme + '://' + parsed_url.netloc
-
-    records = _get_records(Instance.objects.filter(
-        xform__user=user, xform__id_string=id_string))
-
-    status_code = 0
-    if records and server:
-
-        try:
-
-            client = Client(ser)
-            response = client.xls.create(token, json.dumps(records))
-
-            if hasattr(client.xls.conn, 'last_response'):
-                status_code = client.xls.conn.last_response.status_code
-        except Exception as e:
-            raise J2XException(
-                u"J2X client could not generate report. Server -> {0},"
-                u" Error-> {1}".format(server, e)
-            )
-    else:
-        if not server:
-            raise J2XException(u"External server not set")
-        elif not records:
-            raise J2XException(
-                u"No record to export. Form -> {0}".format(id_string)
-            )
-
-    # get or create export object
-    if export_id:
-        export = Export.objects.get(id=export_id)
-    else:
-        export = Export.objects.create(xform=xform, export_type=export_type)
-
-    export.export_url = response
-    if status_code == 201:
-        export.internal_status = Export.SUCCESSFUL
-        export.filename = name + '-' + response[5:] if name else response[5:]
-        export.export_url = ser + response
-    else:
-        export.internal_status = Export.FAILED
-
-    export.save()
-
-    return export
-
-
-def upload_template_for_external_export(server, file_obj):
-
-    try:
-        client = Client(server)
-        response = client.template.create(template_file=file_obj)
-
-        if hasattr(client.template.conn, 'last_response'):
-            status_code = client.template.conn.last_response.status_code
-    except Exception as e:
-        response = str(e)
-        status_code = 500
-
-    return str(status_code) + '|' + response
