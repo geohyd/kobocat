@@ -1,11 +1,9 @@
 # coding: utf-8
-from __future__ import unicode_literals, print_function, division, absolute_import
-
 import os
-import codecs
 
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.core.files.storage import get_storage_class
+from django.test import override_settings
 from django_digest.test import DigestAuth
 from rest_framework.test import APIRequestFactory
 
@@ -68,11 +66,11 @@ class TestBriefcaseAPI(TestAbstractViewSet):
         self.assertEqual(instances.count(), NUM_INSTANCES)
 
         last_index = instances[instances.count() - 1].pk
-        with codecs.open(submission_list_path, 'rb', encoding='utf-8') as f:
-            expected_submission_list = f.read()
+        with open(submission_list_path, 'rb') as f:
+            expected_submission_list = f.read().decode()
             expected_submission_list = \
                 expected_submission_list.replace(
-                    '{{resumptionCursor}}', '%s' % last_index)
+                    '{{resumptionCursor}}', str(last_index))
             self.assertContains(response, expected_submission_list)
 
     def test_view_submission_list_w_deleted_submission(self):
@@ -98,7 +96,7 @@ class TestBriefcaseAPI(TestAbstractViewSet):
         self.assertEqual(instances.count(), NUM_INSTANCES - 1)
 
         last_index = instances[instances.count() - 1].pk
-        with codecs.open(submission_list_path, 'rb', encoding='utf-8') as f:
+        with open(submission_list_path, 'r') as f:
             expected_submission_list = f.read()
             expected_submission_list = \
                 expected_submission_list.replace(
@@ -189,7 +187,7 @@ class TestBriefcaseAPI(TestAbstractViewSet):
             submission_list_path = os.path.join(
                 self.main_directory, 'fixtures', 'transportation',
                 'view', filename)
-            with codecs.open(submission_list_path, encoding='utf-8') as f:
+            with open(submission_list_path, 'r') as f:
                 expected_submission_list = f.read()
                 last_expected_submission_list = expected_submission_list = \
                     expected_submission_list.replace(
@@ -202,13 +200,13 @@ class TestBriefcaseAPI(TestAbstractViewSet):
         self._publish_xml_form()
         self.maxDiff = None
         self._submit_transport_instance_w_attachment()
-        instanceId = '5b2cc313-fc09-437e-8149-fcd32f695d41'
-        instance = Instance.objects.get(uuid=instanceId)
-        formId = '%(formId)s[@version=null and @uiVersion=null]/' \
-                 '%(formId)s[@key=uuid:%(instanceId)s]' % {
+        instance_id = '5b2cc313-fc09-437e-8149-fcd32f695d41'
+        instance = Instance.objects.get(uuid=instance_id)
+        form_id = '%(formId)s[@version=null and @uiVersion=null]/' \
+                  '%(formId)s[@key=uuid:%(instanceId)s]' % {
                      'formId': self.xform.id_string,
-                     'instanceId': instanceId}
-        params = {'formId': formId}
+                     'instanceId': instance_id}
+        params = {'formId': form_id}
         auth = DigestAuth(self.login_username, self.login_password)
         request = self.factory.get(
             self._download_submission_url, data=params)
@@ -216,18 +214,64 @@ class TestBriefcaseAPI(TestAbstractViewSet):
         self.assertEqual(response.status_code, 401)
         request.META.update(auth(request.META, response))
         response = view(request, username=self.user.username)
-        text = "uuid:%s" % instanceId
         download_submission_path = os.path.join(
             self.main_directory, 'fixtures', 'transportation',
             'view', 'downloadSubmission.xml')
-        with codecs.open(download_submission_path, encoding='utf-8') as f:
+        with open(download_submission_path, mode='r') as f:
             text = f.read()
             text = text.replace('{{submissionDate}}',
                                 instance.date_created.isoformat())
             text = text.replace('{{xform_uuid}}',
                                 self.xform.uuid)
-            self.assertContains(response, instanceId, status_code=200)
-            self.assertMultiLineEqual(response.content, text)
+            self.assertContains(response, instance_id, status_code=200)
+            self.assertMultiLineEqual(response.content.decode('utf-8'), text)
+
+    def test_view_download_submission_no_xmlns(self):
+        view = BriefcaseApi.as_view({'get': 'retrieve'})
+        self._publish_xml_form()
+        self.maxDiff = None
+        self._submit_transport_instance_w_attachment(with_namespace=True)
+        instance_id = '5b2cc313-fc09-437e-8149-fcd32f695d41'
+        instance = Instance.objects.get(uuid=instance_id)
+        form_id = '%(formId)s[@version=null and @uiVersion=null]/' \
+                  '%(formId)s[@key=uuid:%(instanceId)s]' % {
+                     'formId': self.xform.id_string,
+                     'instanceId': instance_id}
+        params = {'formId': form_id}
+        auth = DigestAuth(self.login_username, self.login_password)
+        request = self.factory.get(
+            self._download_submission_url, data=params)
+        response = view(request, username=self.user.username)
+        self.assertEqual(response.status_code, 401)
+        request.META.update(auth(request.META, response))
+        response = view(request, username=self.user.username)
+        download_submission_path = os.path.join(
+            self.main_directory, 'fixtures', 'transportation',
+            'view', 'downloadSubmission.xml')
+        response.render()
+        self.assertContains(response, instance_id, status_code=200)
+        self.assertNotIn(
+            'transportation id="transportation_2011_07_25" '
+            'xlmns="http://opendatakit.org/submission" '
+            'instanceID="uuid:5b2cc313-fc09-437e-8149-fcd32f695d41"'
+            f' submissionDate="{instance.date_created.isoformat()}" ',
+            response.content.decode()
+        )
+
+        with override_settings(SUPPORT_BRIEFCASE_SUBMISSION_DATE=False):
+            request = self.factory.get(
+                self._download_submission_url, data=params)
+            response = view(request, username=self.user.username)
+            request.META.update(auth(request.META, response))
+            response = view(request, username=self.user.username)
+            response.render()
+            self.assertNotIn(
+                'transportation id="transportation_2011_07_25" '
+                'xmlns="http://opendatakit.org/submission" '
+                'instanceID="uuid:5b2cc313-fc09-437e-8149-fcd32f695d41" '
+                f'submissionDate="{instance.date_created.isoformat()}" ',
+                response.content.decode()
+            )
 
     def test_view_download_submission_other_user(self):
         view = BriefcaseApi.as_view({'get': 'retrieve'})
@@ -273,7 +317,7 @@ class TestBriefcaseAPI(TestAbstractViewSet):
         self._create_user_profile(alice_data)
         count = XForm.objects.count()
 
-        with codecs.open(self.form_def_path, encoding='utf-8') as f:
+        with open(self.form_def_path, 'rb') as f:
             params = {'form_def_file': f, 'dataFile': ''}
             auth = DigestAuth('alice', 'alicealice')
             request = self.factory.post(self._form_upload_url, data=params)
@@ -290,7 +334,7 @@ class TestBriefcaseAPI(TestAbstractViewSet):
             self.main_directory, 'fixtures', 'transportation',
             'Transportation Form.xml')
         count = XForm.objects.count()
-        with codecs.open(form_def_path, encoding='utf-8') as f:
+        with open(form_def_path, 'rb') as f:
             params = {'form_def_file': f, 'dataFile': ''}
             auth = DigestAuth(self.login_username, self.login_password)
             request = self.factory.post(self._form_upload_url, data=params)
@@ -312,7 +356,7 @@ class TestBriefcaseAPI(TestAbstractViewSet):
         view = BriefcaseApi.as_view({'post': 'create'})
         count = XForm.objects.count()
 
-        with codecs.open(self.form_def_path, encoding='utf-8') as f:
+        with open(self.form_def_path, 'rb') as f:
             params = {'form_def_file': f, 'dataFile': ''}
             auth = auth or DigestAuth(self.login_username, self.login_password)
             request = self.factory.post(self._form_upload_url, data=params)
@@ -335,7 +379,7 @@ class TestBriefcaseAPI(TestAbstractViewSet):
         view = BriefcaseApi.as_view({'post': 'create'})
         self._publish_xml_form()
 
-        with codecs.open(self.form_def_path, encoding='utf-8') as f:
+        with open(self.form_def_path, 'rb') as f:
             params = {'form_def_file': f, 'dataFile': ''}
             auth = DigestAuth(self.login_username, self.login_password)
             request = self.factory.post(self._form_upload_url, data=params)
@@ -350,11 +394,11 @@ class TestBriefcaseAPI(TestAbstractViewSet):
             request.META.update(auth(request.META, response))
             response = view(request, username=self.user.username)
             self.assertEqual(response.status_code, 400)
-
-            self.assertEqual(
-                response.data,
-                {'message': 'Form with this id or SMS-keyword already exists.'
-                 }
+            # SQLite returns `UNIQUE constraint failed` whereas PostgreSQL
+            # returns 'duplicate key ... violates unique constraint'
+            self.assertIn(
+                'unique constraint',
+                response.data['message'].lower(),
             )
 
     def test_upload_head_request(self):
@@ -383,7 +427,7 @@ class TestBriefcaseAPI(TestAbstractViewSet):
             self.main_directory, 'fixtures', 'transportation',
             'view', 'submission.xml')
         count = Instance.objects.count()
-        with codecs.open(submission_path, encoding='utf-8') as f:
+        with open(submission_path, 'rb') as f:
             post_data = {'xml_submission_file': f}
             request = self.factory.post(self._submission_list_url, post_data)
             response = view(request)
@@ -400,6 +444,8 @@ class TestBriefcaseAPI(TestAbstractViewSet):
             self.assertContains(response, message, status_code=201)
             self.assertContains(response, instanceId, status_code=201)
             self.assertEqual(Instance.objects.count(), count + 1)
+
+
 
     def tearDown(self):
         if self.user:

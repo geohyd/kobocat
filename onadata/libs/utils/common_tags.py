@@ -1,5 +1,4 @@
 # coding: utf-8
-from __future__ import unicode_literals, print_function, division, absolute_import
 # WE SHOULD PUT MORE STRUCTURE ON THESE TAGS SO WE CAN ACCESS DOCUMENT
 # FIELDS ELEGANTLY
 
@@ -20,7 +19,7 @@ START = "start"            # This tag was used in Phase II
 END_TIME = "end_time"
 END = "end"
 
-# value of INSTANCE_DOC_NAME that indicates a regisration form
+# value of INSTANCE_DOC_NAME that indicates a registration form
 REGISTRATION = "registration"
 # keys that we'll look for in the registration form
 NAME = "name"
@@ -34,7 +33,7 @@ USERFORM_ID = "_userform_id"
 DATE = "_date"
 GEOLOCATION = "_geolocation"
 SUBMISSION_TIME = '_submission_time'
-DELETEDAT = "_deleted_at"  # marker for delete surveys
+DELETEDAT = "_deleted_at"  # no longer used but may persist in old submissions
 SUBMITTED_BY = "_submitted_by"
 VALIDATION_STATUS = "_validation_status"
 

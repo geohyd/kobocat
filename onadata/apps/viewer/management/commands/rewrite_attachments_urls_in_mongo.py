@@ -1,6 +1,4 @@
 # coding: utf-8
-from __future__ import unicode_literals, print_function, division, absolute_import
-
 import sys
 
 from django.conf import settings
@@ -78,10 +76,6 @@ class Command(BaseCommand):
 
     def __get_data(self):
         query = {"$and": [
-            {"$or": [
-                {"_deleted_at": {"$exists": False}},
-                {"_deleted_at": None}
-            ]},
             {"_attachments": {"$ne": ""}},
             {"_attachments": {"$ne": []}},
             {"$or": [

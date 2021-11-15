@@ -1,19 +1,26 @@
 # coding: utf-8
-from __future__ import unicode_literals, print_function, division, absolute_import
-
 import csv
 import datetime
 import zipfile
 from collections import defaultdict
-from io import BytesIO
+from io import StringIO
 
-from celery import shared_task
+from celery import task, shared_task
 from dateutil import relativedelta
 from django.contrib.auth.models import User
 from django.core.files.storage import get_storage_class
 from django.core.management import call_command
 
+from .models.submission_counter import SubmissionCounter
 from .models import Instance, XForm
+
+
+@task()
+def create_monthly_counters():
+    user_ids = User.objects.values_list('pk', flat=True)
+    for user_id in user_ids:
+        SubmissionCounter.objects.create(user_id=user_id)
+
 
 # ## ISSUE 242 TEMPORARY FIX ##
 # See https://github.com/kobotoolbox/kobocat/issues/242
@@ -82,19 +89,19 @@ def generate_stats_zip(output_filename):
     default_storage = get_storage_class()()
     with default_storage.open(output_filename, 'wb') as output_file:
         zip_file = zipfile.ZipFile(output_file, 'w', zipfile.ZIP_DEFLATED)
-        for filename, report_settings in REPORTS.iteritems():
+        for filename, report_settings in REPORTS.items():
             model_name_plural = report_settings[
                 'model']._meta.verbose_name_plural
             fieldnames = [
                 'Year',
                 'Month',
-                'New {}'.format(model_name_plural.capitalize()),
-                'Cumulative {}'.format(model_name_plural.capitalize()),
+                f'New {model_name_plural.capitalize()}',
+                f'Cumulative {model_name_plural.capitalize()}',
                 'Last Primary Key (possible clue about deleted objects)',
             ]
             data = list_created_by_month(
                 report_settings['model'], report_settings['date_field'])
-            csv_io = BytesIO()
+            csv_io = StringIO()
             writer = csv.DictWriter(csv_io, fieldnames=fieldnames)
             writer.writeheader()
             for row in data:

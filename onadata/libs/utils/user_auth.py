@@ -1,6 +1,4 @@
 # coding: utf-8
-from __future__ import unicode_literals, print_function, division, absolute_import
-import base64
 import re
 from functools import wraps
 
@@ -12,6 +10,7 @@ from django.shortcuts import get_object_or_404
 from guardian.shortcuts import get_perms_for_model, assign_perm
 
 from onadata.apps.logger.models import XForm, Note
+from onadata.libs.utils.string import base64_encodestring, base64_decodestring
 from onadata.apps.main.models import UserProfile
 from onadata.libs.constants import (
     CAN_DELETE_DATA_XFORM,
@@ -66,24 +65,33 @@ def set_profile_data(data, content_user):
 
 def has_permission(xform, owner, request, shared=False):
     user = request.user
-    return shared or xform.shared_data or \
-        (hasattr(request, 'session') and
-         request.session.get('public_link') == xform.uuid) or \
-        owner == user or \
-        user.has_perm('logger.' + CAN_VIEW_XFORM, xform) or \
-        user.has_perm('logger.' + CAN_CHANGE_XFORM, xform)
+    return (
+        shared
+        or xform.shared_data
+        or (
+            hasattr(request, 'session')
+            and request.session.get('public_link') == xform.uuid
+        )
+        or owner == user
+        or user.has_perm('logger.' + CAN_VIEW_XFORM, xform)
+        or user.has_perm('logger.' + CAN_CHANGE_XFORM, xform)
+    )
 
 
 def has_delete_data_permission(xform, owner, request):
     user = request.user
-    return owner == user or \
-        user.has_perm('logger.' + CAN_DELETE_DATA_XFORM, xform)
+    return (
+        owner == user
+        or user.has_perm('logger.' + CAN_DELETE_DATA_XFORM, xform)
+    )
 
 
 def has_edit_permission(xform, owner, request):
     user = request.user
-    return owner == user or \
-        user.has_perm('logger.' + CAN_CHANGE_XFORM, xform)
+    return (
+        owner == user
+        or user.has_perm('logger.' + CAN_CHANGE_XFORM, xform)
+    )
 
 
 def check_and_set_user_and_form(username, id_string, request):
@@ -122,13 +130,13 @@ def get_xform_and_perms(username, id_string, request):
 
 
 def helper_auth_helper(request):
-    if request.user and request.user.is_authenticated():
+    if request.user and request.user.is_authenticated:
         return None
         # source, http://djangosnippets.org/snippets/243/
     if 'HTTP_AUTHORIZATION' in request.META:
         auth = request.META['HTTP_AUTHORIZATION'].split()
         if len(auth) == 2 and auth[0].lower() == "basic":
-            uname, passwd = base64.b64decode(auth[1]).split(':')
+            uname, passwd = base64_decodestring(auth[1].encode()).split(':')
             user = authenticate(username=uname, password=passwd)
             if user:
                 request.user = user
@@ -148,7 +156,7 @@ def basic_http_auth(func):
 
 
 def http_auth_string(username, password):
-    credentials = base64.b64encode('%s:%s' % (username, password)).strip()
+    credentials = base64_encodestring('%s:%s' % (username, password)).strip()
     auth_string = 'Basic %s' % credentials
     return auth_string
 

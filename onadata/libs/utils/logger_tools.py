@@ -1,50 +1,51 @@
 # coding: utf-8
-from __future__ import unicode_literals, print_function, division, absolute_import
-
-from datetime import date, datetime
 import os
-import pytz
 import re
+import sys
 import tempfile
 import traceback
-from xml.dom import Node
+from datetime import date, datetime
 from xml.parsers.expat import ExpatError
 
+import pytz
 from dict2xml import dict2xml
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError, PermissionDenied
 from django.core.files.storage import get_storage_class
 from django.core.mail import mail_admins
-from django.core.servers.basehttp import FileWrapper
-from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.db.models.signals import pre_delete
-from django.http import HttpResponse, HttpResponseNotFound, \
-    StreamingHttpResponse, Http404
+from django.http import (
+    HttpResponse,
+    HttpResponseNotFound,
+    StreamingHttpResponse,
+    Http404
+)
 from django.shortcuts import get_object_or_404
-from django.utils.encoding import DjangoUnicodeDecodeError
-from django.utils.translation import ugettext as _
 from django.utils import timezone
+from django.utils.encoding import DjangoUnicodeDecodeError, smart_str
+from django.utils.translation import ugettext as _
 from modilabs.utils.subprocess_timeout import ProcessTimedOut
 from pyxform.errors import PyXFormError
 from pyxform.xform2json import create_survey_element_from_xml
-import sys
+from xml.dom import Node
+from wsgiref.util import FileWrapper
 
-from onadata.apps.main.models import UserProfile
+from onadata.apps.api.models.one_time_auth_token import OneTimeAuthToken
 from onadata.apps.logger.exceptions import FormInactiveError, DuplicateUUIDError
-from onadata.apps.logger.models import Attachment
+from onadata.apps.logger.models import Attachment, Instance, XForm
 from onadata.apps.logger.models.attachment import (
     generate_attachment_filename,
     hash_attachment_contents,
 )
-from onadata.apps.logger.models import Instance
 from onadata.apps.logger.models.instance import (
     InstanceHistory,
     get_id_string_from_xml_str,
     update_xform_submission_count,
+    update_user_submissions_counter,
 )
-from onadata.apps.logger.models import XForm
 from onadata.apps.logger.models.xform import XLSFormError
 from onadata.apps.logger.xform_instance_parser import (
     InstanceEmptyError,
@@ -55,12 +56,12 @@ from onadata.apps.logger.xform_instance_parser import (
     get_uuid_from_xml,
     get_deprecated_uuid_from_xml,
     get_submission_date_from_xml)
+from onadata.apps.main.models import UserProfile
 from onadata.apps.viewer.models.data_dictionary import DataDictionary
-from onadata.apps.viewer.models.parsed_instance import _remove_from_mongo,\
+from onadata.apps.viewer.models.parsed_instance import _remove_from_mongo, \
     xform_instances, ParsedInstance
 from onadata.libs.utils import common_tags
 from onadata.libs.utils.model_tools import queryset_iterator, set_uuid
-
 
 OPEN_ROSA_VERSION_HEADER = 'X-OpenRosa-Version'
 HTTP_OPEN_ROSA_VERSION_HEADER = 'HTTP_X_OPENROSA_VERSION'
@@ -74,8 +75,14 @@ uuid_regex = re.compile(r'<formhub>\s*<uuid>\s*([^<]+)\s*</uuid>\s*</formhub>',
 mongo_instances = settings.MONGO_DB.instances
 
 
-def _get_instance(xml, new_uuid, submitted_by, status, xform,
-                  defer_counting=False):
+def _get_instance(
+    request: 'rest_framework.request.Request',
+    xml: str,
+    new_uuid: str,
+    status: str,
+    xform: XForm,
+    defer_counting: bool = False,
+) -> Instance:
     """
     `defer_counting=False` will set a Python-only attribute of the same name on
     the *new* `Instance` if one is created. This will prevent
@@ -88,8 +95,8 @@ def _get_instance(xml, new_uuid, submitted_by, status, xform,
 
     if instances:
         # edits
-        check_edit_submission_permissions(submitted_by, xform)
         instance = instances[0]
+        check_edit_submission_permissions(request, xform, instance)
         InstanceHistory.objects.create(
             xml=instance.xml, xform_instance=instance, uuid=old_uuid)
         instance.xml = xml
@@ -97,6 +104,9 @@ def _get_instance(xml, new_uuid, submitted_by, status, xform,
         instance.uuid = new_uuid
         instance.save()
     else:
+        submitted_by = (
+            request.user if request and request.user.is_authenticated else None
+        )
         # new submission
         # Avoid `Instance.objects.create()` so that we can set a Python-only
         # attribute, `defer_counting`, before saving
@@ -152,29 +162,53 @@ def get_xform_from_submission(xml, username, uuid=None):
                              user__username=username)
 
 
-def _has_edit_xform_permission(xform, user):
-    if isinstance(xform, XForm) and isinstance(user, User):
-        return user.has_perm('logger.change_xform', xform)
+def _has_edit_xform_permission(
+    request: 'rest_framework.request.Request', xform: XForm, instance: Instance
+) -> bool:
+    if isinstance(xform, XForm) and isinstance(request.user, User):
+        if request.user.has_perm('logger.change_xform', xform):
+            return True
+
+        # The referrer string contains the UUID of the submission that is
+        # allowed to be edited. Pass the instance being edited to verify that
+        # it matches that UUID
+        is_granted_once = OneTimeAuthToken.grant_access(
+            request, use_referrer=True, instance=instance
+        )
+        # If a one-time authentication request token has been detected,
+        # we return its validity.
+        # Otherwise, the permissions validation keeps going as normal
+        if is_granted_once is not None:
+            return is_granted_once
 
     return False
 
 
-def check_edit_submission_permissions(request_user, xform):
-    if xform and request_user and request_user.is_authenticated():
-        requires_auth = UserProfile.objects.get_or_create(
-            user=xform.user)[0].require_auth
-        has_edit_perms = _has_edit_xform_permission(xform, request_user)
+def check_edit_submission_permissions(
+    request: 'rest_framework.request.Request', xform: XForm, instance: Instance
+):
+    if not xform or not (request and request.user.is_authenticated):
+        return
 
-        if requires_auth and not has_edit_perms:
-            raise PermissionDenied(
-                _("%(request_user)s is not allowed to make edit submissions "
-                  "to %(form_user)s's %(form_title)s form." % {
-                      'request_user': request_user,
-                      'form_user': xform.user,
-                      'form_title': xform.title}))
+    requires_auth = UserProfile.objects.get_or_create(user=xform.user)[0].require_auth  # noqa
+    has_edit_perms = _has_edit_xform_permission(request, xform, instance)
+
+    if requires_auth and not has_edit_perms:
+        raise PermissionDenied(
+            _(
+                "{request_user} is not allowed to make edit submissions "
+                "to {form_user}'s {form_title} form."
+            ).format(
+                request_user=request.user,
+                form_user=xform.user,
+                form_title=xform.title,
+            )
+        )
 
 
-def check_submission_permissions(request, xform):
+def check_submission_permissions(
+    request: 'rest_framework.request.Request', xform: XForm
+):
     """
     Check that permission is required and the request user has permission.
 
@@ -190,10 +224,16 @@ def check_submission_permissions(request, xform):
     :raises: PermissionDenied based on the above criteria.
     """
     profile = UserProfile.objects.get_or_create(user=xform.user)[0]
-    if request and (profile.require_auth or xform.require_auth
-                    or request.path == '/submission')\
-            and xform.user != request.user\
-            and not request.user.has_perm('report_xform', xform):
+    if (
+        request
+        and (
+            profile.require_auth
+            or xform.require_auth
+            or request.path == '/submission'
+        )
+        and xform.user != request.user
+        and not request.user.has_perm('report_xform', xform)
+    ):
         raise PermissionDenied(
             _("%(request_user)s is not allowed to make submissions "
               "to %(form_user)s's %(form_title)s form." % {
@@ -228,8 +268,16 @@ def save_attachments(instance, media_files):
     return any_new_attachment
 
 
-def save_submission(xform, xml, media_files, new_uuid, submitted_by, status,
-                    date_created_override):
+def save_submission(
+    request: 'rest_framework.request.Request',
+    xform: XForm,
+    xml: str,
+    media_files: list,
+    new_uuid: str,
+    status: str,
+    date_created_override: datetime,
+) -> Instance:
+
     if not date_created_override:
         date_created_override = get_submission_date_from_xml(xml)
 
@@ -247,7 +295,7 @@ def save_submission(xform, xml, media_files, new_uuid, submitted_by, status,
     # attribute set to `True` *if* a new instance was created. We are
     # responsible for calling `update_xform_submission_count()` if the returned
     # `Instance` has `defer_counting = True`.
-    instance = _get_instance(xml, new_uuid, submitted_by, status, xform,
+    instance = _get_instance(request, xml, new_uuid, status, xform,
                              defer_counting=True)
 
     save_attachments(instance, media_files)
@@ -274,29 +322,32 @@ def save_submission(xform, xml, media_files, new_uuid, submitted_by, status,
     if getattr(instance, 'defer_counting', False):
         # Remove the Python-only attribute
         del instance.defer_counting
-        update_xform_submission_count(sender=None, instance=instance,
-                                      created=True)
+        update_xform_submission_count(instance=instance, created=True)
+        update_user_submissions_counter(instance=instance, created=True)
 
     return instance
 
 
-@transaction.atomic # paranoia; redundant since `ATOMIC_REQUESTS` set to `True`
-def create_instance(username, xml_file, media_files,
-                    status='submitted_via_web', uuid=None,
-                    date_created_override=None, request=None):
+@transaction.atomic  # paranoia; redundant since `ATOMIC_REQUESTS` set to `True`
+def create_instance(
+    username: str,
+    xml_file: str,
+    media_files: list,
+    status: str = 'submitted_via_web',
+    uuid: str = None,
+    date_created_override: datetime = None,
+    request: 'rest_framework.request.Request' = None,
+) -> Instance:
     """
     Submission cases:
         If there is a username and no uuid, submitting an old ODK form.
         If there is a username and a uuid, submitting a new ODK form.
     """
-    instance = None
-    submitted_by = request.user \
-        if request and request.user.is_authenticated() else None
 
     if username:
         username = username.lower()
 
-    xml = xml_file.read()
+    xml = smart_str(xml_file.read())
     xml_hash = Instance.get_hash(xml)
     xform = get_xform_from_submission(xml, username, uuid)
     check_submission_permissions(request, xform)
@@ -337,9 +388,8 @@ def create_instance(username, xml_file, media_files,
             existing_instance.parsed_instance.save(asynchronous=False)
             return existing_instance
     else:
-        instance = save_submission(xform, xml, media_files, new_uuid,
-                                   submitted_by, status,
-                                   date_created_override)
+        instance = save_submission(request, xform, xml, media_files, new_uuid,
+                                   status, date_created_override)
         return instance
 
 
@@ -386,6 +436,7 @@ def safe_create_instance(username, xml_file, media_files, uuid, request):
 
 
 def report_exception(subject, info, exc_info=None):
+    # TODO: replace with standard logging (i.e. `import logging`)
     if exc_info:
         cls, err = exc_info[:2]
         message = _("Exception in request:"
@@ -458,12 +509,12 @@ def publish_form(callback):
     except (PyXFormError, XLSFormError) as e:
         return {
             'type': 'alert-error',
-            'text': unicode(e)
+            'text': str(e)
         }
     except IntegrityError as e:
         return {
             'type': 'alert-error',
-            'text': _('Form with this id or SMS-keyword already exists.'),
+            'text': str(e),
         }
     except ValidationError as e:
         # on clone invalid URL
@@ -475,7 +526,7 @@ def publish_form(callback):
         # form.publish returned None, not sure why...
         return {
             'type': 'alert-error',
-            'text': unicode(e)
+            'text': str(e)
         }
     except ProcessTimedOut as e:
         # catch timeout errors
@@ -490,13 +541,13 @@ def publish_form(callback):
         # ODK validation errors are vanilla errors and it masks a lot of regular
         # errors if we try to catch it so let's catch it, BUT reraise it
         # if we don't see typical ODK validation error messages in it.
-        if "ODK Validate Errors" not in e.message:
+        if "ODK Validate Errors" not in str(e):
             raise
 
         # error in the XLS file; show an error to the user
         return {
             'type': 'alert-error',
-            'text': unicode(e)
+            'text': str(e)
         }
 
 
@@ -516,7 +567,7 @@ def publish_xls_form(xls_file, user, id_string=None):
 
 
 def publish_xml_form(xml_file, user, id_string=None):
-    xml = xml_file.read()
+    xml = smart_str(xml_file.read())
     survey = create_survey_element_from_xml(xml)
     form_json = survey.to_json()
     if id_string:
@@ -541,7 +592,7 @@ class BaseOpenRosaResponse(HttpResponse):
     status_code = 201
 
     def __init__(self, *args, **kwargs):
-        super(BaseOpenRosaResponse, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         self[OPEN_ROSA_VERSION_HEADER] = OPEN_ROSA_VERSION
         tz = pytz.timezone(settings.TIME_ZONE)
@@ -555,12 +606,16 @@ class OpenRosaResponse(BaseOpenRosaResponse):
     status_code = 201
 
     def __init__(self, *args, **kwargs):
-        super(OpenRosaResponse, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         # wrap content around xml
-        self.content = '''<?xml version='1.0' encoding='UTF-8' ?>
-<OpenRosaResponse xmlns="http://openrosa.org/http/response">
-        <message nature="">%s</message>
-</OpenRosaResponse>''' % self.content
+        self.content = (
+            b"<?xml version='1.0' encoding='UTF-8' ?>\n"
+            b'<OpenRosaResponse xmlns="http://openrosa.org/http/response">\n'
+            b'        <message nature="">'
+        ) + self.content + (
+            b'</message>\n'
+            b'</OpenRosaResponse>'
+        )
 
 
 class OpenRosaResponseNotFound(OpenRosaResponse):
@@ -628,13 +683,16 @@ def update_mongo_for_xform(xform, only_update_missing=True):
         mongo_ids = set(
             [rec[common_tags.ID] for rec in mongo_instances.find(
                 {common_tags.USERFORM_ID: userform_id},
-                {common_tags.ID: 1})])
+                {common_tags.ID: 1},
+                max_time_ms=settings.MONGO_DB_MAX_TIME_MS
+        )])
         sys.stdout.write("Total no of mongo instances: %d\n" % len(mongo_ids))
         # get the difference
         instance_ids = instance_ids.difference(mongo_ids)
     else:
         # clear mongo records
-        mongo_instances.remove({common_tags.USERFORM_ID: userform_id})
+        mongo_instances.delete_many({common_tags.USERFORM_ID: userform_id})
+
     # get instances
     sys.stdout.write(
         "Total no of instances to update: %d\n" % len(instance_ids))
@@ -702,8 +760,10 @@ def mongo_sync_status(remongo=False, update_all=False, user=None, xform=None):
         user = xform.user
         instance_count = Instance.objects.filter(xform=xform).count()
         userform_id = "%s_%s" % (user.username, xform.id_string)
-        mongo_count = mongo_instances.find(
-            {common_tags.USERFORM_ID: userform_id}).count()
+        mongo_count = mongo_instances.count_documents(
+            {common_tags.USERFORM_ID: userform_id},
+            maxTimeMS=settings.MONGO_DB_MAX_TIME_MS
+        )
 
         if instance_count != mongo_count or update_all:
             line = "user: %s, id_string: %s\nInstance count: %d\t"\
@@ -746,9 +806,9 @@ def remove_xform(xform):
 
     # delete instances from mongo db
     query = {
-        ParsedInstance.USERFORM_ID:
-        "%s_%s" % (xform.user.username, xform.id_string)}
-    xform_instances.remove(query, j=True)
+        ParsedInstance.USERFORM_ID: f'{xform.user.username}_{xform.id_string}'
+    }
+    xform_instances.delete_many(query)
 
     # delete xform, and all related models
     xform.delete()

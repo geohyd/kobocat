@@ -1,5 +1,4 @@
 # coding: utf-8
-from __future__ import unicode_literals, print_function, division, absolute_import
 import datetime
 import json
 import logging
@@ -9,9 +8,11 @@ from celery import task
 from dateutil import parser
 from django.conf import settings
 from django.db import models
-from django.db.models.signals import post_save, pre_delete
+from django.db.models.signals import pre_delete
+from django.utils.six import string_types
 from django.utils.translation import ugettext as _
 
+from onadata.apps.api.mongo_helper import MongoHelper
 from onadata.apps.logger.models import Instance
 from onadata.apps.logger.models import Note
 from onadata.apps.restservice.utils import call_service
@@ -22,7 +23,6 @@ from onadata.libs.utils.common_tags import (
     GEOLOCATION,
     SUBMISSION_TIME,
     MONGO_STRFTIME,
-    DELETEDAT,
     TAGS,
     NOTES,
     SUBMITTED_BY,
@@ -30,8 +30,6 @@ from onadata.libs.utils.common_tags import (
 )
 from onadata.libs.utils.decorators import apply_form_field_names
 from onadata.libs.utils.model_tools import queryset_iterator
-from onadata.apps.api.mongo_helper import MongoHelper
-
 
 # this is Mongo Collection where we will store the parsed submissions
 xform_instances = settings.MONGO_DB.instances
@@ -57,10 +55,9 @@ def datetime_from_str(text):
 def update_mongo_instance(record):
     # since our dict always has an id, save will always result in an upsert op
     # - so we dont need to worry whether its an edit or not
-    # http://api.mongodb.org/python/current/api/pymongo/collection.html#pymong\
-    # o.collection.Collection.save
+    # https://api.mongodb.com/python/current/api/pymongo/collection.html#pymongo.collection.Collection.replace_one
     try:
-        xform_instances.save(record)
+        xform_instances.replace_one({'_id': record['_id']}, record, upsert=True)
         return True
     except Exception as e:
         logging.getLogger().error("update_mongo_instance - {}".format(str(e)), exc_info=True)
@@ -74,7 +71,7 @@ class ParsedInstance(models.Model):
     DEFAULT_LIMIT = 30000
     DEFAULT_BATCHSIZE = 1000
 
-    instance = models.OneToOneField(Instance, related_name="parsed_instance")
+    instance = models.OneToOneField(Instance, related_name="parsed_instance", on_delete=models.CASCADE)
     start_time = models.DateTimeField(null=True)
     end_time = models.DateTimeField(null=True)
     # TODO: decide if decimal field is better than float field.
@@ -94,14 +91,22 @@ class ParsedInstance(models.Model):
     @classmethod
     @apply_form_field_names
     def query_mongo(cls, username, id_string, query, fields, sort, start=0,
-                    limit=DEFAULT_LIMIT, count=False, hide_deleted=True):
+                    limit=DEFAULT_LIMIT, count=False):
 
-        cursor = cls._get_mongo_cursor(query, fields, hide_deleted, username, id_string)
+        query = cls._get_mongo_cursor_query(query, username, id_string)
 
         if count:
-            return [{"count": cursor.count()}]
+            return [
+                {
+                    'count': xform_instances.count_documents(
+                        query, maxTimeMS=settings.MONGO_DB_MAX_TIME_MS
+                    )
+                }
+            ]
 
-        if isinstance(sort, basestring):
+        cursor = cls._get_mongo_cursor(query, fields)
+
+        if isinstance(sort, string_types):
             sort = json.loads(sort, object_hook=json_util.object_hook)
         sort = sort if sort else {}
 
@@ -112,13 +117,13 @@ class ParsedInstance(models.Model):
 
     @classmethod
     @apply_form_field_names
-    def mongo_aggregate(cls, query, pipeline, hide_deleted=True):
+    def mongo_aggregate(cls, query, pipeline):
         """Perform mongo aggregate queries
         query - is a dict which is to be passed to $match, a pipeline operator
         pipeline - list of dicts or dict of mongodb pipeline operators,
         http://docs.mongodb.org/manual/reference/operator/aggregation-pipeline
         """
-        if isinstance(query, basestring):
+        if isinstance(query, string_types):
             query = json.loads(
                 query, object_hook=json_util.object_hook) if query else {}
         if not (isinstance(pipeline, dict) or isinstance(pipeline, list)):
@@ -126,13 +131,6 @@ class ParsedInstance(models.Model):
         if not isinstance(query, dict):
             raise Exception(_("Invalid query! %s" % query))
         query = MongoHelper.to_safe_dict(query)
-        if hide_deleted:
-            # display only active elements
-            deleted_at_query = {
-                "$or": [{"_deleted_at": {"$exists": False}},
-                        {"_deleted_at": None}]}
-            # join existing query with deleted_at_query on an $and
-            query = {"$and": [query, deleted_at_query]}
         k = [{'$match': query}]
         if isinstance(pipeline, list):
             k.extend(pipeline)
@@ -145,14 +143,22 @@ class ParsedInstance(models.Model):
     @apply_form_field_names
     def query_mongo_minimal(
             cls, query, fields, sort, start=0, limit=DEFAULT_LIMIT,
-            count=False, hide_deleted=True):
+            count=False):
 
-        cursor = cls._get_mongo_cursor(query, fields, hide_deleted)
+        query = cls._get_mongo_cursor_query(query)
 
         if count:
-            return [{"count": cursor.count()}]
+            return [
+                {
+                    'count': xform_instances.count_documents(
+                        query, maxTimeMS=settings.MONGO_DB_MAX_TIME_MS
+                    )
+                }
+            ]
 
-        if isinstance(sort, basestring):
+        cursor = cls._get_mongo_cursor(query, fields)
+
+        if isinstance(sort, string_types):
             sort = json.loads(sort, object_hook=json_util.object_hook)
         sort = sort if sort else {}
 
@@ -166,45 +172,34 @@ class ParsedInstance(models.Model):
 
     @classmethod
     @apply_form_field_names
-    def query_mongo_no_paging(cls, query, fields, count=False, hide_deleted=True):
+    def query_mongo_no_paging(cls, query, fields, count=False):
 
-        cursor = cls._get_mongo_cursor(query, fields, hide_deleted)
+        query = cls._get_mongo_cursor_query(query)
 
         if count:
-            return [{"count": cursor.count()}]
-        else:
-            return cursor
+            return [
+                {
+                    'count': xform_instances.count_documents(
+                        query, maxTimeMS=settings.MONGO_DB_MAX_TIME_MS
+                    )
+                }
+            ]
+
+        return cls._get_mongo_cursor(query, fields)
 
     @classmethod
-    def _get_mongo_cursor(cls, query, fields, hide_deleted, username=None, id_string=None):
+    def _get_mongo_cursor(cls, query, fields):
         """
         Returns a Mongo cursor based on the query.
 
         :param query: JSON string
         :param fields: Array string
-        :param hide_deleted: boolean
-        :param username: string
-        :param id_string: string
         :return: pymongo Cursor
         """
         fields_to_select = {cls.USERFORM_ID: 0}
-        # TODO: give more detailed error messages to 3rd parties
-        # using the API when json.loads fails
-        if isinstance(query, basestring):
-            query = json.loads(query, object_hook=json_util.object_hook)
-        query = query if query else {}
-        query = MongoHelper.to_safe_dict(query, reading=True)
-
-        if username and id_string:
-            query.update(cls.get_base_query(username, id_string))
-
-        if hide_deleted:
-            # display only active elements
-            # join existing query with deleted_at_query on an $and
-            query = {"$and": [query, {"_deleted_at": None}]}
 
         # fields must be a string array i.e. '["name", "age"]'
-        if isinstance(fields, basestring):
+        if isinstance(fields, string_types):
             fields = json.loads(fields, object_hook=json_util.object_hook)
         fields = fields if fields else []
 
@@ -214,7 +209,33 @@ class ParsedInstance(models.Model):
             fields_to_select = dict(
                 [(MongoHelper.encode(field), 1) for field in fields])
 
-        return xform_instances.find(query, fields_to_select)
+        return xform_instances.find(
+            query,
+            fields_to_select,
+            max_time_ms=settings.MONGO_DB_MAX_TIME_MS,
+        )
+
+    @classmethod
+    def _get_mongo_cursor_query(cls, query, username=None, id_string=None):
+        """
+        Returns the query to get a Mongo cursor.
+
+        :param query: JSON string
+        :param username: string
+        :param id_string: string
+        :return: dict
+        """
+        # TODO: give more detailed error messages to 3rd parties
+        # using the API when json.loads fails
+        if isinstance(query, string_types):
+            query = json.loads(query, object_hook=json_util.object_hook)
+        query = query if query else {}
+        query = MongoHelper.to_safe_dict(query, reading=True)
+
+        if username and id_string:
+            query.update(cls.get_base_query(username, id_string))
+
+        return query
 
     @classmethod
     def _get_paginated_and_sorted_cursor(cls, cursor, start, limit, sort):
@@ -231,7 +252,7 @@ class ParsedInstance(models.Model):
 
         if type(sort) == dict and len(sort) == 1:
             sort = MongoHelper.to_safe_dict(sort, reading=True)
-            sort_key = sort.keys()[0]
+            sort_key = list(sort)[0]
             sort_dir = int(sort[sort_key])  # -1 for desc, 1 for asc
             cursor.sort(sort_key, sort_dir)
 
@@ -259,9 +280,6 @@ class ParsedInstance(models.Model):
             if self.instance.user else None
         }
 
-        if isinstance(self.instance.deleted_at, datetime.datetime):
-            data[DELETEDAT] = self.instance.deleted_at.strftime(MONGO_STRFTIME)
-
         d.update(data)
 
         return MongoHelper.to_safe_dict(d)
@@ -283,7 +301,9 @@ class ParsedInstance(models.Model):
                 if success != self.instance.is_synced_with_mongo:
                     # Skip the labor-intensive stuff in Instance.save() to gain performance
                     # Use .update() instead of .save()
-                    Instance.objects.filter(pk=self.instance.id).update(is_synced_with_mongo=success)
+                    Instance.objects.filter(pk=self.instance.id).update(
+                        is_synced_with_mongo=success
+                    )
 
         return True
 
@@ -349,7 +369,7 @@ class ParsedInstance(models.Model):
         self.start_time = None
         self.end_time = None
         self._set_geopoint()
-        super(ParsedInstance, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
 
         # insert into Mongo.
         # Signal has been removed because of a race condition.
@@ -399,7 +419,7 @@ def _get_attachments_from_instance(instance):
 
 def _remove_from_mongo(sender, **kwargs):
     instance_id = kwargs.get('instance').instance.id
-    xform_instances.remove(instance_id)
+    xform_instances.delete_one({'_id': instance_id})
 
 
 pre_delete.connect(_remove_from_mongo, sender=ParsedInstance)

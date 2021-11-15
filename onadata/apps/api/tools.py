@@ -1,30 +1,43 @@
 # coding: utf-8
-from __future__ import unicode_literals, print_function, division, absolute_import
-
 import inspect
 import os
 import re
 import time
 from datetime import datetime
+from urllib.parse import unquote
 
+import requests
 import rest_framework.views as rest_framework_views
 from django import forms
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.files.storage import get_storage_class
-from django.http import HttpResponseNotFound
-from django.http import HttpResponseRedirect
+from django.http import (
+    HttpResponse,
+    HttpResponseNotFound,
+    HttpResponseRedirect,
+)
 from django.utils.translation import ugettext as _
 from rest_framework import exceptions
+from rest_framework.authtoken.models import Token
+from rest_framework.request import Request
 from taggit.forms import TagField
 
-from onadata.apps.main.forms import QuickConverter
+from onadata.apps.main.forms import QuickConverterForm
 from onadata.apps.main.models import UserProfile
+from onadata.apps.main.models.meta_data import MetaData
 from onadata.apps.viewer.models.parsed_instance import datetime_from_str
-from onadata.libs.utils.logger_tools import publish_form
-from onadata.libs.utils.logger_tools import response_with_mimetype_and_name
-from onadata.libs.utils.user_auth import check_and_set_form_by_id
-from onadata.libs.utils.user_auth import check_and_set_form_by_id_string
+from onadata.libs.utils.logger_tools import (
+    publish_form,
+    response_with_mimetype_and_name,
+    OPEN_ROSA_VERSION_HEADER,
+    OPEN_ROSA_VERSION,
+)
+from onadata.libs.utils.user_auth import (
+    check_and_set_form_by_id,
+    check_and_set_form_by_id_string,
+)
 
 DECIMAL_PRECISION = 2
 
@@ -44,23 +57,6 @@ def _get_id_for_type(record, mongo_field):
 
     return {"$substr": [mongo_str, 0, 10]} if isinstance(date_field, datetime)\
         else mongo_str
-
-# TODO verify tests without this method, then delete
-# def get_accessible_forms(owner=None, shared_form=False, shared_data=False):
-#     xforms = XForm.objects.filter()
-#
-#     if shared_form and not shared_data:
-#         xforms = xforms.filter(shared=True)
-#     elif (shared_form and shared_data) or \
-#             (owner == 'public' and not shared_form and not shared_data):
-#         xforms = xforms.filter(Q(shared=True) | Q(shared_data=True))
-#     elif not shared_form and shared_data:
-#         xforms = xforms.filter(shared_data=True)
-#
-#     if owner != 'public':
-#         xforms = xforms.filter(user__username=owner)
-#
-#     return xforms.distinct()
 
 
 def publish_xlsform(request, user, existing_xform=None):
@@ -84,7 +80,7 @@ def publish_xlsform(request, user, existing_xform=None):
         )
 
     def set_form():
-        form = QuickConverter(request.POST, request.FILES)
+        form = QuickConverterForm(request.POST, request.FILES)
         if existing_xform:
             return form.publish(user, existing_xform.id_string)
         else:
@@ -137,22 +133,21 @@ def add_tags_to_instance(request, instance):
             instance.save()
 
 
-def add_validation_status_to_instance(request, instance):
+def add_validation_status_to_instance(
+    request: Request, instance: 'Instance'
+) -> bool:
     """
-    Saves instance validation status if it's valid (belong to XForm/Asset validation statuses)
-
-    :param request: REST framework's Request object
-    :param instance: Instance object
-    :return: Boolean
+    Save instance validation status if it is valid.
+    To be valid, it has to belong to XForm validation statuses
     """
-    validation_status_uid = request.data.get("validation_status.uid")
+    validation_status_uid = request.data.get('validation_status.uid')
     success = False
 
     # Payload must contain validation_status property.
     if validation_status_uid:
 
         validation_status = get_validation_status(
-            validation_status_uid, instance.asset, request.user.username)
+            validation_status_uid, instance.xform, request.user.username)
         if validation_status:
             instance.validation_status = validation_status
             instance.save()
@@ -187,7 +182,9 @@ def remove_validation_status_from_instance(instance):
     return instance.parsed_instance.update_mongo(asynchronous=False)
 
 
-def get_media_file_response(metadata):
+def get_media_file_response(
+    metadata: MetaData, request: Request = None
+) -> HttpResponse:
     if metadata.data_file:
         file_path = metadata.data_file.name
         filename, extension = os.path.splitext(file_path.split('/')[-1])
@@ -203,28 +200,49 @@ def get_media_file_response(metadata):
             return response
         else:
             return HttpResponseNotFound()
-    else:
+    elif not metadata.is_paired_data:
         return HttpResponseRedirect(metadata.data_value)
 
+    # When `request.user` is authenticated, their authentication is lost with
+    # an HTTP redirection. We use KoBoCAT to proxy the response from KPI
+    headers = {}
+    if not request.user.is_anonymous:
+        token = Token.objects.get(user=request.user)
+        headers['Authorization'] = f'Token {token.key}'
 
-def get_view_name(view_cls, suffix=None):
-    ''' Override Django REST framework's name for the base API class '''
+    # Send the request internally to avoid extra traffic on the public interface
+    internal_url = metadata.data_value.replace(settings.KOBOFORM_URL,
+                                               settings.KOBOFORM_INTERNAL_URL)
+    response = requests.get(internal_url, headers=headers)
+
+    return HttpResponse(
+        content=response.content,
+        status=response.status_code,
+        content_type=response.headers['content-type'],
+    )
+
+
+def get_view_name(view_obj):
+    """
+    Override Django REST framework's name for the base API class
+    """
     # The base API class should inherit directly from APIView. We can't use
     # issubclass() because ViewSets also inherit (indirectly) from APIView.
     try:
-        if inspect.getmro(view_cls)[1] is rest_framework_views.APIView:
-            return 'KoBo Api' # awkward capitalization for consistency
+        if inspect.getmro(view_obj.__class__)[1] is rest_framework_views.APIView:
+            return 'KoBo Api'  # awkward capitalization for consistency
     except KeyError:
         pass
-    return rest_framework_views.get_view_name(view_cls, suffix)
+    return rest_framework_views.get_view_name(view_obj)
 
 
-def get_view_description(view_cls, html=False):
-    ''' Replace example.com in Django REST framework's default API description
-    with the domain name of the current site '''
+def get_view_description(view_obj, html=False):
+    """
+    Replace example.com in Django REST framework's default API description
+    with the domain name of the current site
+    """
     domain = Site.objects.get_current().domain
-    description = rest_framework_views.get_view_description(view_cls,
-        html)
+    description = rest_framework_views.get_view_description(view_obj, html)
     # description might not be a plain string: e.g. it could be a SafeText
     # to prevent further HTML escaping
     original_type = type(description)

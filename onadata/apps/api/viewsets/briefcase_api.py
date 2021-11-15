@@ -1,13 +1,13 @@
 # coding: utf-8
-from __future__ import unicode_literals, print_function, division, absolute_import
+from xml.dom import NotFoundErr
 
+from django.conf import settings
 from django.core.files import File
 from django.core.validators import ValidationError
 from django.contrib.auth.models import User
 from django.http import Http404
 from django.utils.translation import ugettext as _
 from django.utils import six
-
 from rest_framework import exceptions
 from rest_framework import mixins
 from rest_framework import status
@@ -16,7 +16,7 @@ from rest_framework import permissions
 from rest_framework.generics import get_object_or_404
 from rest_framework.renderers import BrowsableAPIRenderer
 from rest_framework.response import Response
-from rest_framework.decorators import detail_route
+from rest_framework.decorators import action
 
 from onadata.apps.api.tools import get_media_file_response
 from onadata.apps.api.permissions import ViewDjangoObjectPermissions
@@ -65,7 +65,7 @@ def _parse_int(num):
         pass
 
 
-class DoXmlFormUpload():
+class DoXmlFormUpload:
 
     def __init__(self, xml_file, user):
         self.xml_file = xml_file
@@ -91,15 +91,16 @@ class BriefcaseApi(OpenRosaHeadersMixin, mixins.CreateModelMixin,
     template_name = 'openrosa_response.xml'
 
     def __init__(self, *args, **kwargs):
-        super(BriefcaseApi, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         # Respect DEFAULT_AUTHENTICATION_CLASSES, but also ensure that the
         # previously hard-coded authentication classes are included first
         authentication_classes = [
             DigestAuthentication,
         ]
         self.authentication_classes = authentication_classes + [
-            auth_class for auth_class in self.authentication_classes
-                if not auth_class in authentication_classes
+            auth_class
+            for auth_class in self.authentication_classes
+            if auth_class not in authentication_classes
         ]
 
     def get_object(self):
@@ -117,11 +118,11 @@ class BriefcaseApi(OpenRosaHeadersMixin, mixins.CreateModelMixin,
 
     def filter_queryset(self, queryset):
         username = self.kwargs.get('username')
-        if username is None and self.request.user.is_anonymous():
+        if username is None and self.request.user.is_anonymous:
             # raises a permission denied exception, forces authentication
             self.permission_denied(self.request)
 
-        if username is not None and self.request.user.is_anonymous():
+        if username is not None and self.request.user.is_anonymous:
             profile = get_object_or_404(
                 UserProfile, user__username=username.lower())
 
@@ -131,7 +132,7 @@ class BriefcaseApi(OpenRosaHeadersMixin, mixins.CreateModelMixin,
             else:
                 queryset = queryset.filter(user=profile.user)
         else:
-            queryset = super(BriefcaseApi, self).filter_queryset(queryset)
+            queryset = super().filter_queryset(queryset)
 
         formId = self.request.GET.get('formId', '')
 
@@ -224,22 +225,34 @@ class BriefcaseApi(OpenRosaHeadersMixin, mixins.CreateModelMixin,
         submission_xml_root_node.setAttribute(
             'submissionDate', self.object.date_created.isoformat()
         )
+
+        # Added this because of https://github.com/onaio/onadata/pull/2139
+        # Should bring support to ODK v1.17+
+        if settings.SUPPORT_BRIEFCASE_SUBMISSION_DATE:
+            # Remove namespace attribute if any
+            try:
+                submission_xml_root_node.removeAttribute('xmlns')
+            except NotFoundErr:
+                pass
+
         data = {
             'submission_data': submission_xml_root_node.toxml(),
             'media_files': Attachment.objects.filter(instance=self.object),
             'host': request.build_absolute_uri().replace(
                 request.get_full_path(), '')
         }
-        return Response(data,
-                        headers=self.get_openrosa_headers(request,
-                                                          location=False),
-                        template_name='downloadSubmission.xml')
+        return Response(
+            data,
+            headers=self.get_openrosa_headers(request, location=False),
+            template_name='downloadSubmission.xml',
+        )
 
-    @detail_route(methods=['GET'])
+    @action(detail=True, methods=['GET'])
     def manifest(self, request, *args, **kwargs):
         self.object = self.get_object()
-        object_list = MetaData.objects.filter(data_type='media',
-                                              xform=self.object)
+        object_list = MetaData.objects.filter(
+            data_type__in=MetaData.MEDIA_FILES_TYPE, xform=self.object
+        )
         context = self.get_serializer_context()
         serializer = XFormManifestSerializer(object_list, many=True,
                                              context=context)
@@ -248,7 +261,7 @@ class BriefcaseApi(OpenRosaHeadersMixin, mixins.CreateModelMixin,
                         headers=self.get_openrosa_headers(request,
                                                           location=False))
 
-    @detail_route(methods=['GET'])
+    @action(detail=True, methods=['GET'])
     def media(self, request, *args, **kwargs):
         self.object = self.get_object()
         pk = kwargs.get('metadata')
@@ -257,6 +270,10 @@ class BriefcaseApi(OpenRosaHeadersMixin, mixins.CreateModelMixin,
             raise Http404()
 
         meta_obj = get_object_or_404(
-            MetaData, data_type='media', xform=self.object, pk=pk)
+            MetaData,
+            data_type__in=MetaData.MEDIA_FILES_TYPE,
+            xform=self.object,
+            pk=pk,
+        )
 
-        return get_media_file_response(meta_obj)
+        return get_media_file_response(meta_obj, request)

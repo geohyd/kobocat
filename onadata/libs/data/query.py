@@ -1,5 +1,4 @@
 # coding: utf-8
-from __future__ import unicode_literals, print_function, division, absolute_import
 from django.conf import settings
 from django.db import connection
 
@@ -47,24 +46,25 @@ def _get_fields_of_type(xform, types):
 
 
 def _json_query(field):
-    if settings.TESTING_MODE:
+    if not settings.USE_POSTGRESQL:
         return "json_extract(json, '$.{}')".format(field)
     else:
-        return "json->>'%s'" % field
+        return f"json::jsonb->>'{field}'"
 
 
 def _postgres_count_group(field, name, xform):
     string_args = _query_args(field, name, xform)
     if is_date_field(xform, field):
-        if settings.TESTING_MODE:
+        if not settings.USE_POSTGRESQL:
             string_args['json'] = "date(%(json)s)" % string_args
         else:
-            string_args['json'] = "to_char(to_date(%(json)s, 'YYYY-MM-DD'), 'YYYY" \
-                                  "-MM-DD')" % string_args
+            string_args['json'] = (
+                "to_char(to_date(%(json)s, 'YYYY-MM-DD'), 'YYYY"
+                "-MM-DD')" % string_args
+            )
 
     return "SELECT %(json)s AS \"%(name)s\", COUNT(*) AS count FROM "\
            "%(table)s WHERE %(restrict_field)s=%(restrict_value)s "\
-           "AND %(exclude_deleted)s "\
            "GROUP BY %(json)s" % string_args
 
 
@@ -72,8 +72,7 @@ def _postgres_select_key(field, name, xform):
     string_args = _query_args(field, name, xform)
 
     return "SELECT %(json)s AS \"%(name)s\" FROM %(table)s WHERE "\
-           "%(restrict_field)s=%(restrict_value)s "\
-           "AND %(exclude_deleted)s" % string_args
+           "%(restrict_field)s=%(restrict_value)s" % string_args
 
 
 def _query_args(field, name, xform):
@@ -82,8 +81,7 @@ def _query_args(field, name, xform):
         'json': _json_query(field),
         'name': name,
         'restrict_field': 'xform_id',
-        'restrict_value': xform.pk,
-        'exclude_deleted': 'deleted_at IS NULL'}
+        'restrict_value': xform.pk}
 
 
 def _select_key(field, name, xform):

@@ -1,7 +1,8 @@
 # coding: utf-8
-from __future__ import unicode_literals, print_function, division, absolute_import
-
-from django.core.urlresolvers import reverse
+import requests
+from django.urls import reverse
+from django_digest.test import DigestAuth
+from django_digest.test import Client as DigestClient
 
 from onadata.apps.main.tests.test_base import TestBase
 from onadata.apps.logger.models import Attachment
@@ -18,7 +19,7 @@ class TestAttachmentUrl(TestBase):
         self._publish_transportation_form()
         self._submit_transport_instance_w_attachment()
         self.url = reverse(
-            attachment_url, kwargs={'size': 'original'})
+            'attachment_url', kwargs={'size': 'original'})
 
     def test_attachment_url(self):
         self.assertEqual(
@@ -26,6 +27,18 @@ class TestAttachmentUrl(TestBase):
         response = self.client.get(
             self.url, {"media_file": self.attachment_media_file})
         self.assertEqual(response.status_code, 200)  # nginx is used as proxy
+
+    def test_attachment_url_with_digest_auth(self):
+        self.client.logout()
+        response = self.client.get(
+            self.url, {'media_file': self.attachment_media_file}
+        )
+        self.assertEqual(response.status_code, 401)  # nginx is used as proxy
+        self.assertTrue('WWW-Authenticate' in response)
+        digest_client = DigestClient()
+        digest_client.set_authorization(self.login_username, self.login_password)
+        response = digest_client.get(self.url, {'media_file': self.attachment_media_file})
+        self.assertEqual(response.status_code, 200)
 
     def test_attachment_not_found(self):
         response = self.client.get(
