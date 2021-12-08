@@ -1,4 +1,8 @@
-from kc_environ import *  # nopep8
+from .base import *  # nopep8
+
+from onadata.libs.utils.redis_helper import RedisHelper
+SESSION_ENGINE = "redis_sessions.session"
+SESSION_REDIS = RedisHelper.config(default="redis://redis_cache:6380/2")
 
 # Number of times Celery retries to send data to external rest service
 REST_SERVICE_MAX_RETRIES = 3
@@ -20,7 +24,7 @@ TIME_ZONE = 'Europe/Paris'
 USE_TZ = False
 
 #If you want to add middleware to Kobocat
-#MIDDLEWARE_CLASSES = ('onadata.middleware.Middle', ) + MIDDLEWARE_CLASSES
+#MIDDLEWARE_CLASSES = ('antea.middleware.Middle', ) + MIDDLEWARE_CLASSES
 
 #If you want change de max upload size on form.
 #Need to match with nginx client_max_body_size config
@@ -35,5 +39,5 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', '')
 CORS_ORIGIN_WHITELIST = (
     #'dev.ona.io',
 )
-
 CSRF_COOKIE_HTTPONLY = False
+
