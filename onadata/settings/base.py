@@ -274,11 +274,11 @@ LOGGING = {
         }
     },
     'loggers': {
-		'django.db.backends': {
-			'level': 'DEBUG',
-			'handlers': ['console'],
-			'propagate': False,
-		},
+		# 'django.db.backends': {
+			# 'level': 'DEBUG',
+			# 'handlers': ['console'],
+			# 'propagate': False,
+		# },
         'django.request': {
             'handlers': ['mail_admins', 'console'],
             'level': 'DEBUG',
@@ -541,7 +541,9 @@ SUPPORTED_MEDIA_UPLOAD_TYPES = [
     'text/csv',
     'application/xml',
     'application/zip',
-    'application/x-zip-compressed'
+    'application/x-zip-compressed',
+    'application/geo+json',
+    'application/json'
 ]
 
 DEFAULT_VALIDATION_STATUSES = [

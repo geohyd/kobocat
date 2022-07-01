@@ -143,6 +143,10 @@ class MetaDataSerializer(serializers.HyperlinkedModelSerializer):
             filename, extension = os.path.splitext(
                 os.path.basename(parsed_url.path)
             )
+            from urllib.parse import parse_qs
+            url_args = parse_qs(parsed_url.query)
+            if 'filename' in url_args:
+                filename, extension = os.path.splitext(url_args['filename'][0])
             if not extension:
                 try:
                     # `stream=True` makes `requests` to not download the whole

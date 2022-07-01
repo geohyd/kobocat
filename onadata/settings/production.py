@@ -10,11 +10,14 @@ REST_SERVICE_MAX_RETRIES = 3
 DATABASES = {
     'default': {
         'ENGINE': 'django.contrib.gis.db.backends.postgis',
-        'NAME': os.environ.get('PG_DB', 'kobo_db'),
+        'NAME': os.environ.get('PG_DB_KOBO', 'kobo_db'),
         'USER': os.environ.get('PG_USER', 'kobo'),
         'PASSWORD': os.environ.get('PG_PASS', 'kobo'),
         'HOST': os.environ.get('PG_HOST', '127.0.0.1'),
         'PORT': os.environ.get('PG_PORT', '5432'),
+        'OPTIONS': {
+            'options': '-c search_path=kobo'
+        },
     }
 }
 
@@ -24,7 +27,9 @@ TIME_ZONE = 'Europe/Paris'
 USE_TZ = False
 
 #If you want to add middleware to Kobocat
-#MIDDLEWARE_CLASSES = ('antea.middleware.Middle', ) + MIDDLEWARE_CLASSES
+# MIDDLEWARE = ['antea.middleware.Middle'] + MIDDLEWARE
+# TODO : try to fix that (when enketo submit form, error with an http header ...)
+MIDDLEWARE.insert(0,'antea.middleware.MultipleProxyMiddleware')
 
 #If you want change de max upload size on form.
 #Need to match with nginx client_max_body_size config
