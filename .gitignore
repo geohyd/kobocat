@@ -62,3 +62,4 @@ ansible
 
 # sublime text files
 *sublime-*
+/kc
