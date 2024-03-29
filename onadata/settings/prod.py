@@ -19,7 +19,7 @@ TEMPLATES[0]['OPTIONS']['debug'] = False
 #         'PORT': os.environ.get('PG_PORT', '5432'),
 #     }
 # }
-
+DATABASES['default']['ENGINE']='django.contrib.gis.db.backends.postgis'
 
 TIME_ZONE = 'Europe/Paris'
 #USE_TZ = True
@@ -31,7 +31,7 @@ USE_TZ = False
 #If you want change de max upload size on form.
 #Need to match with nginx client_max_body_size config
 #You cannot exceed ABSOLUTE_MAX_SIZE in enketo/public/js/src/module/connection.js, or change value to.
-DEFAULT_CONTENT_LENGTH = 20000000
+DEFAULT_CONTENT_LENGTH = 50000000
 
 ADMINS = (
     (os.environ.get('DEFAULT_ADMIN_NAME', ''), os.environ.get('DEFAULT_ADMIN_MAIL', '')),
